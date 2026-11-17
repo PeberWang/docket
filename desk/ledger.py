@@ -130,19 +130,15 @@ def add_card(conn, delegation_id: str, kind: str, body: dict, queued: bool = Fal
 
 
 def push_card(conn, delegation_id: str, kind: str, body: dict) -> tuple[int, bool]:
-    """New briefs replace the one on screen (the panel stays short); permission requests never do.
+    """Cards wait their turn, first in first out; none is ever overwritten.
 
-    Precedence: a permission card waits for the user and cannot be replaced. A brief that
-    arrives while one is open is queued and shown once the permission is answered. Otherwise
-    the new card supersedes the unanswered brief, which is what keeps the panel short.
+    A permission request is one of these cards: without an answer the work cannot go on,
+    so it must not be skipped either. Answered cards drop out of the list entirely.
     Returns (card id, queued).
     """
-    waiting = open_card(conn, delegation_id)
-    if waiting and json.loads(waiting["body"]).get("pending_permission"):
-        return add_card(conn, delegation_id, kind, body, queued=True), True
-    if waiting:
-        resolve_card(conn, waiting["id"], {"action": "superseded", "by": kind})
-    queued = bool(conn.execute("select 1 from cards where delegation_id = ? and resolved_at is null and queued = 1", (delegation_id,)).fetchone())
+    queued = open_card(conn, delegation_id) is not None or bool(
+        conn.execute("select 1 from cards where delegation_id = ? and resolved_at is null and queued = 1", (delegation_id,)).fetchone()
+    )
     return add_card(conn, delegation_id, kind, body, queued=queued), queued
 
 

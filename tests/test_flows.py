@@ -106,27 +106,28 @@ class Flows(unittest.TestCase):
         self.assertFalse(self.desk.retry_with_fallback("ses_x", "session limit again"))  # only once
         self.assertFalse(self.desk.retry_with_fallback("ses_x", "some other failure"))
 
-    def test_a_new_brief_replaces_the_old_one(self):
+    def test_cards_wait_their_turn_and_none_is_overwritten(self):
         self.desk.show_card("ses_x", "question", dict(CARD, progress="first"))
         self.desk.show_card("ses_x", "report", dict(CARD, progress="second"))
-        shown = ledger.open_card(self.db, "ses_x")
-        self.assertEqual(json.loads(shown["body"])["progress"], "second")
-        self.assertEqual(self.db.execute("select count(*) from cards where delegation_id='ses_x' and queued=1").fetchone()[0], 0)
-
-    def test_a_permission_card_is_never_replaced(self):
-        self.desk.show_card("ses_x", "question", dict(CARD, progress="brief"))
-        self.desk.permission_card("ses_x", {"id": "per_1", "action": "external_directory", "resources": ["/tmp/*"]})
-        permission = ledger.open_card(self.db, "ses_x")
-        self.assertIn("pending_permission", json.loads(permission["body"]))
-        self.desk.show_card("ses_x", "report", dict(CARD, progress="new brief"))
-        still = ledger.open_card(self.db, "ses_x")
-        self.assertEqual(still["id"], permission["id"])  # the request keeps waiting
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "first")
         self.assertEqual(self.db.execute("select count(*) from cards where delegation_id='ses_x' and queued=1").fetchone()[0], 1)
+        ledger.resolve_card(self.db, ledger.open_card(self.db, "ses_x")["id"], {"reply": "ok"})
+        self.desk.advance("ses_x")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "second")
+
+    def test_a_permission_card_takes_its_turn_like_any_other(self):
+        self.desk.show_card("ses_x", "question", dict(CARD, progress="brief"))
+        self.desk.permission_card("ses_x", {"id": "per_1", "action": "external_directory", "resources": ["/tmp/a", "/tmp/b"]})
+        brief = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(json.loads(brief["body"])["progress"], "brief")  # the brief keeps its place
+        ledger.resolve_card(self.db, brief["id"], {"reply": "ok"})
+        self.desk.advance("ses_x")
+        permission = ledger.open_card(self.db, "ses_x")
+        self.assertIn("• /tmp/a", json.loads(permission["body"])["progress"])  # what it wants, listed
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append(decision)
         self.desk.decide(permission["id"], {"permission": "once"}, "")
         self.assertEqual(answered, ["once"])
-        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "new brief")
 
     def test_card_validation(self):
         self.assertEqual(pm.validate_card(dict(CARD)), [])

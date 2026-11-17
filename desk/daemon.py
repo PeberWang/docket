@@ -228,10 +228,12 @@ class Desk:
         row = self.delegation(session_id)
         if not row or row["state"] in ("closed", "taken_over"):
             return
-        stale = ledger.open_permission_card(self.db(), session_id)
-        if stale:  # the run is over; the request can no longer be answered
-            ledger.resolve_card(self.db(), stale["id"], {"action": "expired"})
-            ledger.log(self.db(), session_id, "permission:expired", {"card": stale["id"]})
+        for stale in self.db().execute(
+            "select id, body from cards where delegation_id = ? and resolved_at is null", (session_id,)
+        ).fetchall():
+            if json.loads(stale["body"]).get("pending_permission"):  # the run is over; it can no longer be answered
+                ledger.resolve_card(self.db(), stale["id"], {"action": "expired"})
+                ledger.log(self.db(), session_id, "permission:expired", {"card": stale["id"]})
         ledger.set_state(self.db(), session_id, "pending")
         self.submit(session_id, self.write_card, session_id, event, reply)
 
