@@ -49,7 +49,7 @@ struct CardView: View {
                 .foregroundStyle(.orange)
             }
 
-            if let items = card?.decidedForYou, !items.isEmpty {
+            if phase != .closed, let items = card?.decidedForYou, !items.isEmpty {
                 SectionDivider()
                 handledForYou(items)
             }
