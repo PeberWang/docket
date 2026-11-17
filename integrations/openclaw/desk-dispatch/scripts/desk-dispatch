@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Hand a coding task to an agent and let OpenClaw Desk follow it.
+
+    desk-dispatch [--engine opencode|claude|codex] --title "<task name>" [-f BRIEF] [--model M] [--auto] "<instruction>"
+
+  opencode (default)  runs `opencode-dispatch --detach`: archived, inbox prefix, returns at once
+  claude, codex       the Desk service starts the CLI agent in the current directory and follows it
+
+Returns as soon as the task is started. The caller gets no completion notice: the Desk
+verifies the delivery, writes briefs and sends follow-ups. Follow-ups never go through
+this script.
+
+Environment:
+  DESK_ENGINE         default engine (else config.json "engine", else opencode)
+  OPENCODE_DISPATCH   path to opencode-dispatch (default: the sibling OpenClaw skill)
+  DESK_DISPATCH_DRY_RUN=1   print what would happen
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HOME = Path(os.environ.get("DESK_HOME", Path.home() / "Library/Application Support/openclaw-desk"))
+ENGINES = {"opencode": "OpenCode", "claude": "Claude Code", "codex": "Codex"}
+
+
+def fail(message: str, code: int = 2):
+    print(f"desk-dispatch: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def parse(argv):
+    options = {"engine": None, "title": None, "brief": None, "model": None, "auto": False}
+    rest = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--engine", "--title", "-f", "--file", "--model", "-m") and i + 1 < len(argv):
+            key = {"-f": "brief", "--file": "brief", "-m": "model"}.get(arg, arg.lstrip("-"))
+            options[key] = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith(("--engine=", "--title=", "--model=")):
+            key, value = arg[2:].split("=", 1)
+            options[key] = value
+        elif arg == "--auto":
+            options["auto"] = True
+        elif arg in ("-s", "--session", "-c", "--continue"):
+            fail("follow-ups go through the Desk, not this script")
+        elif arg in ("-h", "--help"):
+            print(__doc__.strip())
+            sys.exit(0)
+        elif arg.startswith("-"):
+            fail(f"unknown option {arg}")
+        else:
+            rest.append(arg)
+        i += 1
+    options["instruction"] = " ".join(rest).strip()
+    return options
+
+
+def default_engine() -> str:
+    if os.environ.get("DESK_ENGINE"):
+        return os.environ["DESK_ENGINE"]
+    try:
+        return json.loads((HOME / "config.json").read_text(encoding="utf-8")).get("engine") or "opencode"
+    except (OSError, ValueError):
+        return "opencode"
+
+
+def opencode(options):
+    script = os.environ.get("OPENCODE_DISPATCH") or str(Path(__file__).resolve().parents[2] / "opencode-dispatch/scripts/opencode-dispatch")
+    if not Path(script).exists():
+        script = "opencode-dispatch"
+    argv = [script, "--detach", "--title", options["title"]]
+    if options["auto"]:
+        argv.append("--auto")
+    if options["brief"]:
+        argv += ["-f", options["brief"]]
+    if options["model"]:
+        argv += ["--model", options["model"]]
+    argv.append(options["instruction"] or "Follow the attached brief.")
+    if os.environ.get("DESK_DISPATCH_DRY_RUN") == "1":
+        print(" ".join(argv))
+        sys.exit(0)
+    os.execvp(argv[0], argv)
+
+
+def cli(options, engine):
+    brief = ""
+    if options["brief"]:
+        try:
+            brief = Path(options["brief"]).expanduser().read_text(encoding="utf-8")
+        except OSError as error:
+            fail(f"cannot read the brief: {error}")
+    body = {
+        "engine": engine,
+        "title": options["title"],
+        "directory": os.getcwd(),
+        "instruction": options["instruction"] or "Follow the attached brief.",
+        "brief": brief,
+        "model": options["model"],
+    }
+    if os.environ.get("DESK_DISPATCH_DRY_RUN") == "1":
+        print(json.dumps({**body, "brief": f"<{len(brief)} chars>"}, ensure_ascii=False))
+        sys.exit(0)
+    try:
+        service = json.loads((HOME / "daemon.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        fail("the Desk service is not running (no daemon.json)", 1)
+    request = urllib.request.Request(
+        service["url"] + "/api/dispatch",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "X-Desk-Token": service["token"]},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        fail(f"the Desk refused: {error.read().decode('utf-8', 'replace')[:300]}", 1)
+    except urllib.error.URLError as error:
+        fail(f"the Desk service is not reachable: {error.reason}", 1)
+    print(f"dispatched in background: {options['title']} (handoff {result['id']}, {ENGINES[engine]}). Follow-ups happen on the Desk.")
+
+
+def main():
+    options = parse(sys.argv[1:])
+    if not options["title"] or not options["title"].strip():
+        fail('a task needs --title "<task name>"')
+    if not options["instruction"] and not options["brief"]:
+        fail("give an instruction or a brief file (-f)")
+    engine = options["engine"] or default_engine()
+    if engine not in ENGINES:
+        fail(f"unknown engine {engine} (opencode, claude, codex)")
+    if engine == "opencode":
+        opencode(options)
+    else:
+        cli(options, engine)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,8 @@
+eval/data/
+__pycache__/
+*.pyc
+.build/
+*.local.json
+# working files agents leave in the project
+OPENCLAW_TASK*.md
+OPENCLAW_HANDOFF*.md
