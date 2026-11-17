@@ -49,7 +49,8 @@ Rules:
 4. To verify a delivery you may read files and run unit tests. Do not change project code, commit, push, release, run anything that sends or deploys (email, chat, push notifications, scheduled jobs, servers), or edit cron.
 5. A handoff gets at most 3 rounds of the user's decisions relayed to OpenCode. When they are used up, the Desk suggests the user take it over in OpenCode.
 6. Write every user-facing string in {_language()}, in plain words. Someone who has not read the code or the project's docs must understand each question; name things by what they are, not by internal terms (a "gate table" is a file's name, not an explanation), and keep file names out of decisions unless the user must pick one.
-7. Write every user-facing string in {_language()}.
+7. Use no Markdown in card text: no asterisks for emphasis, no backticks, no headings. The panel shows plain text, so Markdown would appear literally.
+8. Write every user-facing string in {_language()}.
 7. Your final reply is a single JSON object and nothing else."""
 
 
@@ -266,9 +267,41 @@ def ask(session_key: str, message: str, validate, attempts: int = 2):
     raise PMError("the PM's reply failed validation twice: " + "; ".join(last_errors))
 
 
+_MARKUP = (
+    ("**", ""),
+    ("__", ""),
+    ("`", ""),
+    ("### ", ""),
+    ("## ", ""),
+    ("# ", ""),
+)
+
+
+def plain(text: str) -> str:
+    """Card text is shown as plain text: drop the Markdown a model reaches for by habit."""
+    for token, replacement in _MARKUP:
+        text = text.replace(token, replacement)
+    return text.strip()
+
+
+def _plain_deep(value):
+    if isinstance(value, str):
+        return plain(value)
+    if isinstance(value, list):
+        return [_plain_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _plain_deep(v) for k, v in value.items()}
+    return value
+
+
 def normalize(value: dict) -> dict:
     card = value.get("card") if value.get("action") == "card" else (value if "progress" in value else None)
     if card is not None:
         card.setdefault("decisions", [])
         card.setdefault("decided_for_you", [])
+    for key in ("card", "message", "conclusion"):
+        if key in value:
+            value[key] = _plain_deep(value[key])
+    if "progress" in value:
+        value = _plain_deep(value)
     return value

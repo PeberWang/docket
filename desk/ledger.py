@@ -69,6 +69,17 @@ create index if not exists cards_open on cards(delegation_id, resolved_at);
 """
 
 
+def _clean(value):
+    """Card text is plain: strip the emphasis markers a model may have written."""
+    if isinstance(value, str):
+        return value.replace("**", "").replace("`", "")
+    if isinstance(value, list):
+        return [_clean(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _clean(v) for k, v in value.items()}
+    return value
+
+
 def now() -> int:
     return int(time.time() * 1000)
 
@@ -206,7 +217,7 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
                     "id": last["id"],
                     "kind": last["kind"],
                     "open": last["resolved_at"] is None,
-                    **{k: v for k, v in json.loads(last["body"]).items() if k not in ("pending_relay", "pending_permission")},
+                    **{k: _clean(v) for k, v in json.loads(last["body"]).items() if k not in ("pending_relay", "pending_permission")},
                     **({"choices": answer.get("choices") or {}, "reply": answer.get("reply") or ""} if answer else {}),
                 }
                 if last
