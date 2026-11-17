@@ -165,6 +165,20 @@ struct CardView: View {
         }
     }
 
+    private func summaryBlock(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12.5))
+            .foregroundStyle(.primary.opacity(0.9))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+    }
+
     private var replyField: some View {
         let draft = Binding(
             get: { store.draft(for: delegation.id) },
