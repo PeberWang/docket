@@ -81,12 +81,26 @@ class Desk:
 
         return self.workers.submit(run)
 
+
+    def show_card(self, delegation_id: str, kind: str, body: dict):
+        """Queue the card if one is already waiting; the panel never swaps an unanswered card."""
+        card_id, queued = ledger.push_card(self.db(), delegation_id, kind, body)
+        if not queued:
+            ledger.set_state(self.db(), delegation_id, "awaiting")
+        else:
+            ledger.log(self.db(), delegation_id, "card:queued", {"card": card_id, "kind": kind})
+        return card_id
+
+    def advance(self, delegation_id: str):
+        """After a card is answered: show the next queued one, or go back to running."""
+        nxt = ledger.next_queued(self.db(), delegation_id)
+        ledger.set_state(self.db(), delegation_id, "awaiting" if nxt else "running")
+
     def fail_card(self, delegation_id: str, message: str):
         db = self.db()
         if not ledger.get(db, delegation_id):
             return
-        ledger.add_card(db, delegation_id, "failure", {"progress": message[:240], "decisions": [], "decided_for_you": []})
-        ledger.set_state(db, delegation_id, "awaiting")
+        self.show_card(delegation_id, "failure", {"progress": message[:240], "decisions": [], "decided_for_you": []})
 
     def delegation(self, delegation_id: str) -> dict | None:
         row = ledger.get(self.db(), delegation_id)
@@ -214,8 +228,39 @@ class Desk:
         row = self.delegation(session_id)
         if not row or row["state"] in ("closed", "taken_over"):
             return
+        stale = ledger.open_permission_card(self.db(), session_id)
+        if stale:  # the run is over; the request can no longer be answered
+            ledger.resolve_card(self.db(), stale["id"], {"action": "expired"})
+            ledger.log(self.db(), session_id, "permission:expired", {"card": stale["id"]})
         ledger.set_state(self.db(), session_id, "pending")
         self.submit(session_id, self.write_card, session_id, event, reply)
+
+    LIMIT_MARKERS = ("session limit", "usage limit", "quota", "rate limit exceeded", "resets at", "hit your limit")
+
+    def retry_with_fallback(self, delegation_id: str, reply: str) -> bool:
+        """A run that stopped on a usage limit is retried once on the fallback model."""
+        row = self.delegation(delegation_id)
+        fallback = self.settings.get("fallback_model")
+        if not row or row.get("engine") != "opencode" or not fallback:
+            return False
+        if not any(marker in (reply or "").lower() for marker in self.LIMIT_MARKERS):
+            return False
+        last = self.db().execute(
+            "select detail from events where delegation_id = ? and kind = 'relayed' order by id desc limit 1", (delegation_id,)
+        ).fetchone()
+        if not last or not last[0]:
+            return False
+        message = json.loads(last[0])["message"]
+        if "fallback" in (json.loads(last[0]).get("via") or ""):
+            return False  # already retried once
+        log.warning("usage limit on %s, retrying on %s", delegation_id, fallback)
+        self.db().execute(
+            "insert into events (delegation_id, at, kind, detail) values (?, ?, 'relayed', ?)",
+            (delegation_id, ledger.now(), json.dumps({"message": message, "via": "fallback", "model": fallback}, ensure_ascii=False)),
+        )
+        ledger.set_state(self.db(), delegation_id, "running")
+        self.engine(row).resume(row, message, fallback)
+        return True
 
     def write_card(self, session_id: str, event: str, reply: str | None = None):
         row = self.delegation(session_id)
@@ -223,31 +268,39 @@ class Desk:
             return
         if reply is None:
             reply = self.engine(row).last_reply(row)
+        if event in ("failed", "interrupted") and self.retry_with_fallback(session_id, reply):
+            return
         first = not self.db().execute("select 1 from cards where delegation_id = ? limit 1", (session_id,)).fetchone()
         if first:
             message = pm.first_wake(row, json.loads(row["context"] or "[]"), event, reply)
         else:
             message = pm.later_wake(event, reply, row["rounds"])
         card = pm.ask(row["pm_key"], message, pm.validate_card)
-        ledger.add_card(self.db(), session_id, card.get("kind", "report"), card)
-        ledger.set_state(self.db(), session_id, "awaiting")
+        self.show_card(session_id, card.get("kind", "report"), card)
 
     # ---------- the user acted in the panel ----------
 
-    def decide(self, card_id: int, choices: dict, reply: str):
+    def decide(self, card_id: int, choices: dict, reply: str, replay: bool = False):
         db = self.db()
         card = db.execute("select * from cards where id = ?", (card_id,)).fetchone()
-        if not card or card["resolved_at"] is not None:
+        if not card or (card["resolved_at"] is not None and not replay):
             raise ValueError(self.t("err_answered"))
         row = self.delegation(card["delegation_id"])
         if row["state"] in ("closed", "taken_over"):
             raise ValueError(self.t("err_over"))
-        ledger.resolve_card(db, card_id, {"choices": choices, "reply": reply})
+        if not replay:
+            ledger.resolve_card(db, card_id, {"choices": choices, "reply": reply})
         body = json.loads(card["body"])
         if body.get("pending_permission"):  # answering OpenCode's permission request, not the PM
             decision = "once" if choices.get("permission") == "once" else "reject"
-            self.engine(row).answer_permission(row, body["pending_permission"], decision)
-            ledger.set_state(db, row["id"], "running")
+            try:
+                self.engine(row).answer_permission(row, body["pending_permission"], decision)
+            except Exception as error:
+                # The run may have finished in the same moment: say so plainly instead of a 500.
+                ledger.log(db, row["id"], "permission:stale", {"error": str(error)[:300]})
+                self.advance(row["id"])
+                raise ValueError(self.t("permission_expired")) from error
+            self.advance(row["id"])
             return
         if body.get("pending_relay"):  # confirming a relay proposed from a chat mention
             if choices.get("relay") == "yes":
@@ -262,6 +315,23 @@ class Desk:
             return
         ledger.set_state(db, row["id"], "pending")
         self.submit(row["id"], self.act, row["id"], pm.decision_wake(body, choices, reply, row["rounds"]))
+
+    def replay(self, card_id: int):
+        """Run an answered card's decision again, e.g. after a bug stopped it the first time."""
+        db = self.db()
+        card = db.execute("select * from cards where id = ?", (card_id,)).fetchone()
+        if not card or not card["resolution"]:
+            raise ValueError(self.t("err_answered"))
+        resolution = json.loads(card["resolution"])
+        if "choices" not in resolution:
+            raise ValueError(self.t("err_answered"))
+        # Undo the previous failure card so the panel shows the retry, not the error.
+        db.execute(
+            "update cards set resolved_at = ?, resolution = ? where delegation_id = ? and resolved_at is null",
+            (ledger.now(), json.dumps({"action": "superseded", "note": "replayed"}), card["delegation_id"]),
+        )
+        ledger.resolve_card(db, card_id, {**resolution, "replayed_at": ledger.now()})
+        self.decide(card_id, resolution.get("choices") or {}, resolution.get("reply") or "", replay=True)
 
     def act(self, delegation_id: str, message: str, confirm: str | None = None):
         """Wake the PM and carry out its action.
@@ -290,18 +360,16 @@ class Desk:
                 "decided_for_you": [t("confirm_draft", text=action["message"][:100])],
                 "pending_relay": action["message"],
             }
-            ledger.add_card(self.db(), delegation_id, "question", card)
-            ledger.set_state(self.db(), delegation_id, "awaiting")
+            self.show_card(delegation_id, "question", card)
             return
         if kind == "relay":
             self.relay(delegation_id, action["message"])
         elif kind == "card":
-            ledger.add_card(self.db(), delegation_id, action["card"].get("kind", "question"), action["card"])
-            ledger.set_state(self.db(), delegation_id, "awaiting")
+            self.show_card(delegation_id, action["card"].get("kind", "question"), action["card"])
         else:
             self.finish(delegation_id, action["conclusion"])
 
-    def relay(self, delegation_id: str, message: str):
+    def relay(self, delegation_id: str, message: str, model: str | None = None):
         row = self.delegation(delegation_id)
         if row["rounds"] >= ledger.ROUND_LIMIT:
             self.limit_card(delegation_id)
@@ -310,18 +378,29 @@ class Desk:
         if isinstance(engine, engines.Cli):
             self.launch(delegation_id, message, first=False)
         else:
-            engine.resume(row, message)
+            engine.resume(row, message, model)
         ledger.set_state(self.db(), delegation_id, "running", rounds=row["rounds"] + 1)
         ledger.log(self.db(), delegation_id, "relayed", {"message": message[:500]})
 
+    def retry(self, delegation_id: str):
+        """Send the last relayed instruction again, on the fallback model."""
+        row = self.delegation(delegation_id)
+        fallback = self.settings.get("fallback_model")
+        last = self.db().execute(
+            "select detail from events where delegation_id = ? and kind = 'relayed' order by id desc limit 1", (delegation_id,)
+        ).fetchone()
+        if not row or not fallback or not last or not last[0]:
+            raise ValueError(self.t("err_missing"))
+        if ledger.open_card(self.db(), delegation_id):
+            raise ValueError(self.t("err_open_card"))
+        message = json.loads(last[0])["message"]
+        self.engine(row).resume(row, message, fallback)
+        ledger.set_state(self.db(), delegation_id, "running")
+        ledger.log(self.db(), delegation_id, "relayed", {"message": message, "via": "fallback", "model": fallback})
+        return fallback
+
     def limit_card(self, delegation_id: str):
-        ledger.add_card(
-            self.db(),
-            delegation_id,
-            "limit",
-            {"progress": self.t("limit", n=ledger.ROUND_LIMIT), "decisions": [], "decided_for_you": []},
-        )
-        ledger.set_state(self.db(), delegation_id, "awaiting")
+        self.show_card(delegation_id, "limit", {"progress": self.t("limit", n=ledger.ROUND_LIMIT), "decisions": [], "decided_for_you": []})
 
     def close(self, delegation_id: str, reply: str):
         row = self.delegation(delegation_id)
@@ -341,6 +420,8 @@ class Desk:
 
     def finish(self, delegation_id: str, conclusion: str):
         row = self.delegation(delegation_id)
+        for card in self.db().execute("select id from cards where delegation_id = ? and resolved_at is null", (delegation_id,)).fetchall():
+            ledger.resolve_card(self.db(), card["id"], {"action": "closed"})
         ledger.add_card(self.db(), delegation_id, "closed", {"progress": conclusion, "conclusion": conclusion, "decisions": [], "decided_for_you": []})
         ledger.set_state(self.db(), delegation_id, "closed")
         self.write_memory(row, conclusion)
@@ -507,10 +588,17 @@ class Desk:
         if not row or row["state"] in ("closed", "taken_over") or not request.get("id"):
             return
         t = self.t
-        resources = ", ".join(request.get("resources") or [])[:120]
+        resources = " ".join(str(r) for r in request.get("resources") or [])
+        if request.get("action") == "external_directory":
+            progress = t("permission_wants_path") + " " + ", ".join(resources.split()[:3])[:160]
+        else:
+            first = " · ".join(line.strip() for line in resources.splitlines()[:2])[:200]
+            progress = t("permission_wants_command") + " " + (first or request.get("action", ""))
+        if "rm -rf" in resources or "rm " in resources[:40]:
+            progress += " " + t("permission_dangerous")
         card = {
             "kind": "question",
-            "progress": t("permission_progress", action=request.get("action", "?"), resources=resources),
+            "progress": progress,
             "decisions": [{
                 "id": "permission",
                 "question": t("permission_question"),
@@ -522,8 +610,7 @@ class Desk:
             "decided_for_you": [],
             "pending_permission": request["id"],
         }
-        ledger.add_card(self.db(), session_id, "question", card)
-        ledger.set_state(self.db(), session_id, "awaiting")
+        self.show_card(session_id, "question", card)
 
     def reconcile(self):
         """Catch up on what happened while the daemon was down."""
@@ -617,6 +704,10 @@ def serve(desk: Desk):
                     desk.close(parts[2], (body.get("reply") or "").strip())
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "takeover":
                     desk.takeover(parts[2])
+                elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "retry":
+                    return self.reply(202, {"ok": True, "model": desk.retry(parts[2])})
+                elif parts[:2] == ["api", "cards"] and len(parts) == 4 and parts[3] == "replay":
+                    desk.replay(int(parts[2]))
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "rewrite":
                     desk.rewrite(parts[2])
                 else:

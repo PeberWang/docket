@@ -31,6 +31,11 @@ TEXT = {
         "err_closed": "This handoff is already closed.",
         "err_missing": "No such handoff.",
         "err_empty": "Pick an option or write a reply.",
+        "err_open_card": "Answer the card that is waiting first.",
+        "permission_expired": "That run has already finished, so the permission is no longer needed.",
+        "permission_wants_path": "OpenCode wants to touch paths outside the project:",
+        "permission_wants_command": "OpenCode wants to run:",
+        "permission_dangerous": "This deletes files.",
     },
     "zh": {
         "language": "简体中文",
@@ -55,6 +60,11 @@ TEXT = {
         "err_closed": "这件交办已经结案",
         "err_missing": "没有这件交办",
         "err_empty": "选一个选项或回一句话",
+        "err_open_card": "先把正在等你的那张卡处理掉",
+        "permission_expired": "那一轮已经结束了，这次授权不再需要。",
+        "permission_wants_path": "OpenCode 想访问项目目录以外的路径：",
+        "permission_wants_command": "OpenCode 想执行：",
+        "permission_dangerous": "这条命令会删文件。",
     },
 }
 

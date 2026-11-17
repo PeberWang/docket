@@ -17,7 +17,8 @@ def parse(command: str):
     directory = None
     match = re.match(r"\s*cd\s+(\S+)\s*&&", command)
     if match:
-        directory = match.group(1)
+        # `cd ~/…` is common; subprocess does not expand `~`, so store the real path.
+        directory = str(Path(match.group(1).strip("'\"")).expanduser())
     marker = next(m for m in ("desk-dispatch", "opencode-dispatch", "opencode run") if m in command)
     tail = re.split(r"\s(?:2>&1|\||;|&&)\s", command.split(marker, 1)[-1])[0]
     try:

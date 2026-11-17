@@ -32,7 +32,7 @@ class Flows(unittest.TestCase):
 
         daemon.Service = engines.Service = FakeService
         # Never start real agents from a test: every engine's follow-up is recorded instead.
-        engines.OpenCode.resume = lambda engine, handoff, text: sent.append(text)
+        engines.OpenCode.resume = lambda engine, handoff, text, model=None: sent.append(text)
         engines.Cli.launch = lambda engine, handoff, prompt, first: (_ for _ in ()).throw(AssertionError("no CLI runs in tests"))
         engines.Cli.takeover = engines.OpenCode.takeover = lambda engine, handoff: None
         pm.ask = lambda key, message, validate: self.answers.pop(0)
@@ -94,6 +94,29 @@ class Flows(unittest.TestCase):
         self.assertEqual(answered, [("per_1", "once")])
         self.assertEqual(self.desk.delegation("ses_x")["state"], "running")
         self.assertEqual(self.sent, [])  # answering a permission is not a round
+
+    def test_usage_limit_retries_once_on_the_fallback(self):
+        calls = []
+        engines.OpenCode.resume = lambda engine, handoff, text, model=None: calls.append((text, model))
+        import json as _json
+        self.db.execute("insert into events (delegation_id, at, kind, detail) values (?, ?, 'relayed', ?)",
+                        ("ses_x", ledger.now(), _json.dumps({"message": "do more"})))
+        self.assertTrue(self.desk.retry_with_fallback("ses_x", "You've hit your session limit · resets 6:40pm"))
+        self.assertEqual(calls, [("do more", self.desk.settings["fallback_model"])])
+        self.assertFalse(self.desk.retry_with_fallback("ses_x", "session limit again"))  # only once
+        self.assertFalse(self.desk.retry_with_fallback("ses_x", "some other failure"))
+
+    def test_a_new_card_never_replaces_a_waiting_one(self):
+        self.desk.show_card("ses_x", "question", dict(CARD, progress="first"))
+        self.desk.show_card("ses_x", "report", dict(CARD, progress="second"))
+        first = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(json.loads(first["body"])["progress"], "first")
+        queued = self.db.execute("select count(*) from cards where delegation_id = 'ses_x' and queued = 1").fetchone()[0]
+        self.assertEqual(queued, 1)
+        ledger.resolve_card(self.db, first["id"], {"reply": "answer one"})
+        self.desk.advance("ses_x")
+        second = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(json.loads(second["body"])["progress"], "second")
 
     def test_card_validation(self):
         self.assertEqual(pm.validate_card(dict(CARD)), [])

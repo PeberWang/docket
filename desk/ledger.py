@@ -46,7 +46,8 @@ create table if not exists cards (
   kind text not null,                  -- report | question | failure | closed | note
   body text not null,                  -- JSON, see desk/pm.py CARD_SCHEMA
   resolved_at integer,
-  resolution text                      -- JSON: {"choice": ..., "reply": ..., "action": ...}
+  resolution text,                     -- JSON: {"choice": ..., "reply": ..., "action": ...}
+  queued integer not null default 0    -- 1: written while another card was open; shown when that one is answered
 );
 create table if not exists events (
   id integer primary key autoincrement,
@@ -83,6 +84,9 @@ def connect(path: Path = DB) -> sqlite3.Connection:
     for name, kind in (("engine", "text not null default 'opencode'"), ("engine_session", "text"), ("model", "text")):
         if name not in columns:  # ledgers from before the engine layer
             conn.execute(f"alter table delegations add column {name} {kind}")
+    card_columns = {row[1] for row in conn.execute("pragma table_info(cards)")}
+    if "queued" not in card_columns:
+        conn.execute("alter table cards add column queued integer not null default 0")
     return conn
 
 
@@ -117,18 +121,48 @@ def set_state(conn, delegation_id: str, state: str, **fields) -> None:
     log(conn, delegation_id, f"state:{state}", fields or None)
 
 
-def add_card(conn, delegation_id: str, kind: str, body: dict) -> int:
+def add_card(conn, delegation_id: str, kind: str, body: dict, queued: bool = False) -> int:
     cursor = conn.execute(
-        "insert into cards (delegation_id, created_at, kind, body) values (?, ?, ?, ?)",
-        (delegation_id, now(), kind, json.dumps(body, ensure_ascii=False)),
+        "insert into cards (delegation_id, created_at, kind, body, queued) values (?, ?, ?, ?, ?)",
+        (delegation_id, now(), kind, json.dumps(body, ensure_ascii=False), 1 if queued else 0),
     )
     return cursor.lastrowid
 
 
+def push_card(conn, delegation_id: str, kind: str, body: dict) -> tuple[int, bool]:
+    """Add a card without ever replacing one the user has not answered.
+
+    If a card is already open, the new one waits its turn (queued) and the caller should
+    leave the delegation in `awaiting`: the panel keeps showing the question it showed.
+    Returns (card id, queued).
+    """
+    queued = open_card(conn, delegation_id) is not None or bool(
+        conn.execute("select 1 from cards where delegation_id = ? and resolved_at is null and queued = 1", (delegation_id,)).fetchone()
+    )
+    return add_card(conn, delegation_id, kind, body, queued), queued
+
+
 def open_card(conn, delegation_id: str):
+    """The card the panel shows: the oldest unanswered one (queued ones wait)."""
     return conn.execute(
-        "select * from cards where delegation_id = ? and resolved_at is null order by id desc limit 1", (delegation_id,)
+        "select * from cards where delegation_id = ? and resolved_at is null and queued = 0 order by id limit 1", (delegation_id,)
     ).fetchone()
+
+
+def next_queued(conn, delegation_id: str):
+    row = conn.execute(
+        "select * from cards where delegation_id = ? and resolved_at is null and queued = 1 order by id limit 1", (delegation_id,)
+    ).fetchone()
+    if row:
+        conn.execute("update cards set queued = 0 where id = ?", (row["id"],))
+    return row
+
+
+def open_permission_card(conn, delegation_id: str):
+    row = open_card(conn, delegation_id)
+    if row and json.loads(row["body"]).get("pending_permission"):
+        return row
+    return None
 
 
 def resolve_card(conn, card_id: int, resolution: dict) -> None:

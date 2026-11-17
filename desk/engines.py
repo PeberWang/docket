@@ -66,15 +66,18 @@ class Engine:
 class OpenCode(Engine):
     name, label = "opencode", "OpenCode"
 
-    def resume(self, handoff, text):
+    def resume(self, handoff, text, model: str | None = None):
         # `opencode run -s <unknown id>` would start a brand-new session: make sure it exists.
         Service().session(handoff["id"])
         RUNS.mkdir(parents=True, exist_ok=True)
         out = RUNS / f"{handoff['id']}-{uuid.uuid4().hex[:8]}.out"
+        workdir = Path(handoff.get("directory") or Path.home()).expanduser()
+        if not workdir.is_dir():
+            raise RuntimeError(f"project directory not found: {workdir}")
         with open(out, "wb") as stdout:
             subprocess.Popen(
-                ["opencode", "run", "-s", handoff["id"], *self.args, text],
-                cwd=handoff.get("directory") or str(Path.home()),
+                ["opencode", "run", "-s", handoff["id"], *(["--model", model] if model else []), *self.args, text],
+                cwd=str(workdir),
                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.STDOUT,
                 start_new_session=True,  # the service's event stream reports when the run ends
             )
@@ -113,10 +116,13 @@ class Cli(Engine):
         RUNS.mkdir(parents=True, exist_ok=True)
         out = RUNS / f"{handoff['id']}-{uuid.uuid4().hex[:8]}.out"
         argv = self.command(handoff, prompt, first, out)
+        workdir = Path(handoff.get("directory") or Path.home()).expanduser()
+        if not workdir.is_dir():
+            raise RuntimeError(f"project directory not found: {workdir}")
         with open(out, "wb") as stdout:
             process = subprocess.Popen(
                 argv,
-                cwd=handoff.get("directory") or str(Path.home()),
+                cwd=str(workdir),
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=subprocess.STDOUT,
@@ -124,7 +130,7 @@ class Cli(Engine):
             )
         return {"pid": process.pid, "out": str(out), "process": process}
 
-    def resume(self, handoff, text):
+    def resume(self, handoff, text, model: str | None = None):
         raise RuntimeError("the daemon launches CLI follow-ups itself")  # see Desk.relay
 
     def last_reply(self, handoff):

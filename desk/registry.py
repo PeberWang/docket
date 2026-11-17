@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 
 from desk import config as desk_config
 from desk import dispatches
@@ -47,7 +48,7 @@ def find_dispatch(title: str, created_ms: int, settings: dict):
                     "session_id": session_id,
                     "seq": seq,
                     "time": created,
-                    "directory": parsed["directory"],
+                    "directory": os.path.expanduser(parsed["directory"]) if parsed["directory"] else None,
                     "brief": dispatches.read_brief(parsed["directory"], parsed["brief_path"]),
                     "instruction": parsed["instruction"],
                 }
