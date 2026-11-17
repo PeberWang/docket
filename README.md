@@ -72,6 +72,8 @@ To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too)
 - Ask OpenClaw to hand something off, as you normally would. It answers with one line.
 - When a brief is ready, the pill on the right edge shows a count. Click it or press ⌥⌘D.
 - Pick an option, or write one line, and send. **Mark done** closes the handoff; **Open in OpenCode** (or **Continue in Terminal**) hands the session to you.
+- Cards wait their turn. If a new brief or a permission request arrives while a card is waiting, it queues behind it (the card shows "N more waiting") and nothing is overwritten. Answered cards drop out; a closed handoff shows only its conclusion.
+- A permission request is an ordinary card that happens to block the work. It says in one sentence what the coding agent wants to do outside the project and what the risk is, for example "It wants to delete some temporary files outside the project; deleted files cannot be recovered." If the run ends first, the request expires by itself.
 - `desk-dispatch --engine claude` or `--engine codex` picks another coding agent for one task; `"engine"` in the config changes the default.
 
 ## Configure
