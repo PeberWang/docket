@@ -196,6 +196,9 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
                 "engine": row["engine"],
                 "state": row["state"],
                 "rounds": row["rounds"],
+                "queued": conn.execute(
+                    "select count(*) from cards where delegation_id = ? and resolved_at is null and queued = 1", (row["id"],)
+                ).fetchone()[0],
                 "round_limit": ROUND_LIMIT,
                 "dispatched_at": row["dispatched_at"],
                 "updated_at": row["updated_at"],

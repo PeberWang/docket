@@ -111,6 +111,7 @@ struct CardView: View {
         if let ms = delegation.updatedAt ?? delegation.dispatchedAt {
             parts.append(s.relative(Date(timeIntervalSince1970: ms / 1000)))
         }
+        if let more = delegation.queued, more > 0 { parts.append(s(.queued, more)) }
         return parts.joined(separator: s(.metaSeparator))
     }
 

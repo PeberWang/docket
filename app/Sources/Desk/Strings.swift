@@ -32,7 +32,7 @@ enum StringKey: Sendable {
     case phaseAwaiting, phasePending, phaseRunning, phaseTakenOver, phaseClosed, phaseUnknown
     case activityRunning, activityPending
     // Card
-    case round, metaSeparator, justNow
+    case round, queued, metaSeparator, justNow
     case recommended, handledForYou
     case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
@@ -67,6 +67,7 @@ struct Strings: Sendable {
         .activityPending: ("Writing the next brief…", "PM 整理中…"),
 
         .round: ("Round %d of %d", "第 %d/%d 轮"),
+        .queued: ("%d more waiting", "另有 %d 张等候"),
         .metaSeparator: (" · ", " · "),
         .justNow: ("Just now", "刚刚"),
         .recommended: ("Recommended", "推荐"),
