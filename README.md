@@ -20,7 +20,7 @@ When your OpenClaw agent hands a task to a coding agent (OpenCode, Claude Code o
 
 **…keep following up in the chat?** A chat is synchronous: a question you have not answered blocks the conversation, and every report lands between everything else you are doing. Your agent's habit of expanding on things is exactly wrong for a task you handed off so you would not have to think about the details. The Desk is asynchronous and terse on purpose.
 
-**…open the session in OpenCode, or use an inbox?** That means reading the coding agent's transcript and, in practice, steering technical details yourself. An inbox tells you a session exists; the Desk tells you what was decided and asks only what is left. (The [OpenCode inbox plugin](https://github.com/PeberWang/opencode-openclaw-inbox) and the Desk work together; the Desk can be the only entry point.)
+**…open the session in OpenCode, or use an [inbox](https://github.com/PeberWang/opencode-openclaw-inbox)?** That means reading the coding agent's transcript and, in practice, steering technical details yourself. An inbox tells you a session exists; the Desk tells you what was decided and asks only what is left. The two fit together: start with the inbox if all you want is to see dispatched sessions and jump into them; the Desk is the same idea carried further, with a PM per handoff. They share the dispatch convention, and the Desk can be the only entry point.
 
 **…let the agent run and check the result later?** You would get a long technical summary written by the agent that did the work. The Desk's PM is a second agent that verifies the delivery and turns it into a decision. Its output is checked in code: lengths, number of questions, exactly one recommended option.
 
