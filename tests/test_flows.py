@@ -123,7 +123,9 @@ class Flows(unittest.TestCase):
         ledger.resolve_card(self.db, brief["id"], {"reply": "ok"})
         self.desk.advance("ses_x")
         permission = ledger.open_card(self.db, "ses_x")
-        self.assertIn("• /tmp/a", json.loads(permission["body"])["progress"])  # what it wants, listed
+        progress = json.loads(permission["body"])["progress"]
+        self.assertIn("read files outside the project", progress)  # one plain sentence
+        self.assertNotIn("/tmp/a", progress)  # no raw paths
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append(decision)
         self.desk.decide(permission["id"], {"permission": "once"}, "")

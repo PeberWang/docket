@@ -591,16 +591,16 @@ class Desk:
             return
         t = self.t
         resources = " ".join(str(r) for r in request.get("resources") or [])
-        lines = [line.strip() for line in resources.splitlines() if line.strip()]
-        if request.get("action") == "external_directory":
-            head = t("permission_wants_path")
-            items = " ".join(resources.split()).split(",")[:3]
+        temp = any(marker in resources for marker in ("/tmp", "/var/folders", "TMPDIR"))
+        delete = "rm -rf" in resources or "rm " in resources[:40]
+        if delete:
+            action = t("permission_delete_temp") if temp else t("permission_delete_files")
+            risk = t("permission_risk_delete")
+        elif request.get("action") == "external_directory":
+            action, risk = t("permission_read_files"), t("permission_risk_read")
         else:
-            head = t("permission_wants_command")
-            items = [line[:160] for line in lines[:3]] or [request.get("action", "?")]
-        progress = head + "\n" + "\n".join(f"• {item}" for item in items)
-        if any("rm -rf" in item or item.startswith("rm ") for item in items):
-            progress += "\n" + t("permission_dangerous")
+            action, risk = t("permission_run_command"), t("permission_risk_change")
+        progress = t("permission_sentence", action=action, risk=risk)
         card = {
             "kind": "question",
             "progress": progress,
