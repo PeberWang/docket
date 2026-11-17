@@ -28,10 +28,6 @@ struct CardView: View {
                     .opacity(answered ? 0.6 : 1)
             }
 
-            if answered, phase != .closed, let summary = answerSummary, !summary.isEmpty {
-                answerBlock(summary)
-            }
-
             switch phase {
             case .running: ActivityLine(text: s(.activityRunning))
             case .pending: ActivityLine(text: s(.activityPending))
@@ -167,53 +163,6 @@ struct CardView: View {
                 .padding(.leading, 4)
             }
         }
-    }
-
-    /// The user's answer: from the daemon if it echoes it, else what this app sent.
-    private var answerSummary: [String]? {
-        guard let card else { return nil }
-        let local = store.sentAnswers[card.id]
-        let choices = card.choices ?? local?.choices ?? [:]
-        let reply = card.reply ?? local?.reply ?? ""
-        var lines: [String] = []
-        for decision in card.decisions {
-            guard let picked = choices[decision.id],
-                  let option = decision.options.first(where: { $0.id == picked }) else { continue }
-            lines.append(s(.answerChoice, decision.question, option.label))
-        }
-        if !reply.isEmpty { lines.append(s(.youSaid, reply)) }
-        return lines
-    }
-
-    private func summaryBlock(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12.5))
-            .foregroundStyle(.primary.opacity(0.9))
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
-            )
-    }
-
-    private func answerBlock(_ lines: [String]) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.secondary.opacity(0.4))
-                .frame(width: 2)
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .font(.system(size: 11.5))
-            .foregroundStyle(.secondary)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .opacity(phase == .closed ? 1 : 0.8)
     }
 
     private var replyField: some View {

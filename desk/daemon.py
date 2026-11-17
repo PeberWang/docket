@@ -589,13 +589,16 @@ class Desk:
             return
         t = self.t
         resources = " ".join(str(r) for r in request.get("resources") or [])
+        lines = [line.strip() for line in resources.splitlines() if line.strip()]
         if request.get("action") == "external_directory":
-            progress = t("permission_wants_path") + " " + ", ".join(resources.split()[:3])[:160]
+            head = t("permission_wants_path")
+            items = " ".join(resources.split()).split(",")[:3]
         else:
-            first = " · ".join(line.strip() for line in resources.splitlines()[:2])[:200]
-            progress = t("permission_wants_command") + " " + (first or request.get("action", ""))
-        if "rm -rf" in resources or "rm " in resources[:40]:
-            progress += " " + t("permission_dangerous")
+            head = t("permission_wants_command")
+            items = [line[:160] for line in lines[:3]] or [request.get("action", "?")]
+        progress = head + "\n" + "\n".join(f"• {item}" for item in items)
+        if any("rm -rf" in item or item.startswith("rm ") for item in items):
+            progress += "\n" + t("permission_dangerous")
         card = {
             "kind": "question",
             "progress": progress,
