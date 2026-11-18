@@ -85,7 +85,7 @@ struct CardView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
         )
-        .opacity(phase == .closed ? 0.55 : 1)
+        .opacity(phase == .closed || phase == .takenOver ? 0.55 : 1)
     }
 
     // MARK: Pieces
