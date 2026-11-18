@@ -86,7 +86,13 @@ class Flows(unittest.TestCase):
     def test_permission_request_becomes_a_card(self):
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append((request, decision))
-        self.desk.permission_card("ses_x", {"id": "per_1", "action": "external_directory", "resources": ["/tmp/*"]})
+        # Reads outside the project are auto-approved (the run was started with --auto); destructive ones ask.
+        approved = []
+        engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: approved.append((request, decision))
+        self.desk.permission_card("ses_x", {"id": "per_read", "action": "external_directory", "resources": ["/tmp/notes.md"]})
+        self.assertEqual(approved, [("per_read", "once")])
+        self.assertIsNone(ledger.open_card(self.db, "ses_x") or None)
+        self.desk.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/build"]})
         card = ledger.open_card(self.db, "ses_x")
         self.assertEqual(json.loads(card["body"])["pending_permission"], "per_1")
         self.assertNotIn("pending_permission", ledger.snapshot(self.db)[0]["card"])  # never shown to the app

@@ -584,13 +584,28 @@ class Desk:
         elif kind == "permission.asked":
             self.permission_card(session_id, data if str(data.get("id", "")).startswith("per_") else nested)
 
+    @staticmethod
+    def _destructive(resources: str) -> bool:
+        lowered = resources.lower()
+        return any(marker in lowered for marker in ("rm -rf", "rm ", "sudo ", "chmod -r", "mv ", "trash", "/etc/", "/usr/", "/system/"))
+
     def permission_card(self, session_id: str, request: dict):
         """A run that still asks for permission must not wait silently: ask on the Desk."""
         row = self.delegation(session_id)
         if not row or row["state"] in ("closed", "taken_over") or not request.get("id"):
             return
         t = self.t
+        # A run started with --auto was an explicit "let it approve its own requests". OpenCode
+        # still asks for paths outside the project, and those requests expire within seconds:
+        # asking the user to race them never worked. Approve them here, except destructive ones.
         resources = " ".join(str(r) for r in request.get("resources") or [])
+        if "--auto" in (self.engine(row).args or []) and not self._destructive(resources):
+            try:
+                self.engine(row).answer_permission(row, request["id"], "once")
+                ledger.log(self.db(), session_id, "permission:auto", {"action": request.get("action"), "resources": resources[:200]})
+                return
+            except Exception as error:
+                log.debug("auto-approve failed: %s", error)
         temp = any(marker in resources for marker in ("/tmp", "/var/folders", "TMPDIR"))
         delete = "rm -rf" in resources or "rm " in resources[:40]
         if delete:
