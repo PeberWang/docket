@@ -156,6 +156,35 @@ class Desk:
         self.db().execute("insert into runs (delegation_id, pid, out, started_at) values (?, ?, ?, ?)", (handoff_id, run["pid"], run["out"], ledger.now()))
         ledger.set_state(self.db(), handoff_id, "running")
 
+    def sweep(self):
+        """Missed events must not leave a handoff 'running' forever.
+
+        Every minute each running OpenCode handoff is compared with the session's real state;
+        a run that ended after the desk last touched the handoff is treated as a run end.
+        """
+        while True:
+            try:
+                for row in self.db().execute("select * from delegations where state = 'running' and engine = 'opencode'").fetchall():
+                    try:
+                        session = Service().session(row["id"])
+                    except Exception as error:
+                        if "404" in str(error) or "NotFound" in str(error):
+                            log.info("sweep: session %s is gone", row["id"])
+                            self.show_card(row["id"], "failure", {"progress": self.t("session_gone"), "decisions": [], "decided_for_you": []})
+                            ledger.set_state(self.db(), row["id"], "closed")
+                        continue
+                    times = session.get("time") or {}
+                    busy = (times.get("busy") or 0) > (times.get("idle") or 0)
+                    idle = times.get("idle") or 0
+                    if busy or not idle or idle < row["updated_at"] - 60_000:
+                        continue
+                    log.info("sweep: %s ended without an event (%s)", row["id"], session.get("outcome"))
+                    ledger.log(self.db(), row["id"], "sweep", {"outcome": session.get("outcome")})
+                    self.on_run_end(row["id"], session.get("outcome") or "succeeded")
+            except Exception:
+                log.exception("sweep failed")
+            time.sleep(60)
+
     def watch_runs(self):
         db = self.db()
         while True:
@@ -760,6 +789,7 @@ def main():
     threading.Thread(target=desk.watch_events, name="events", daemon=True).start()
     threading.Thread(target=desk.watch_mentions, name="mentions", daemon=True).start()
     threading.Thread(target=desk.watch_runs, name="runs", daemon=True).start()
+    threading.Thread(target=desk.sweep, name="sweep", daemon=True).start()
     serve(desk)
 
 
