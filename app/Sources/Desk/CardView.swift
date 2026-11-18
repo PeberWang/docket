@@ -54,7 +54,7 @@ struct CardView: View {
                 .foregroundStyle(.orange)
             }
 
-            if phase != .closed, let items = card?.decidedForYou, !items.isEmpty {
+            if phase != .closed, phase != .takenOver, let items = card?.decidedForYou, !items.isEmpty {
                 SectionDivider()
                 handledForYou(items)
             }
@@ -230,12 +230,7 @@ struct CardView: View {
         case .closed:
             EmptyView()
         case .takenOver:
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                Button(s(delegation.opensInTerminal ? .continueInTerminal : .openInOpenCode)) { store.takeover(delegation) }
-                    .buttonStyle(DeskButtonStyle())
-            }
-            .disabled(busy)
+            EmptyView()  // taken over: the session is yours, the panel has nothing left to offer
         default:
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
