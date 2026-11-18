@@ -6,3 +6,8 @@ __pycache__/
 # working files agents leave in the project
 OPENCLAW_TASK*.md
 OPENCLAW_HANDOFF*.md
+
+# promotion copy (forum posts, launch notes) stays local
+/docs/forum-post.md
+launch-posts.md
+promo/
