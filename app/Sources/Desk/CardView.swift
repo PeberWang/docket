@@ -115,7 +115,7 @@ struct CardView: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(card.decisions) { decision in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(decision.question)
+                    Text(verbatim: decision.question)
                         .font(.system(size: 12.5, weight: .medium))
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(decision.options) { option in
@@ -154,7 +154,7 @@ struct CardView: View {
                     ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text("·")
-                            Text(item).fixedSize(horizontal: false, vertical: true)
+                            Text(verbatim: item).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
@@ -166,7 +166,7 @@ struct CardView: View {
     }
 
     private func summaryBlock(_ text: String) -> some View {
-        Text(text)
+        Text(verbatim: text)
             .font(.system(size: 12.5))
             .foregroundStyle(.primary.opacity(0.9))
             .fixedSize(horizontal: false, vertical: true)
@@ -288,7 +288,7 @@ struct OptionButton: View {
     }
 
     private var label: Text {
-        Text(option.label).fontWeight(selected ? .semibold : .regular)
+        Text(verbatim: option.label).fontWeight(selected ? .semibold : .regular)
     }
 
     var body: some View {
