@@ -36,6 +36,11 @@ struct CardView: View {
 
             if isOpen, let card, !card.decisions.isEmpty {
                 decisions(card)
+            } else if isOpen {
+                Text(s(.nothingToDecide))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if isLimit && phase != .closed && phase != .takenOver {
@@ -93,7 +98,7 @@ struct CardView: View {
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                StateBadge(phase: phase, s: s)
+                StateBadge(phase: phase, s: s, readyToClose: delegation.readyToClose)
             }
             Text(meta)
                 .font(.system(size: 11).monospacedDigit())
@@ -246,9 +251,9 @@ struct CardView: View {
                         }
                     }
                 }
-                .buttonStyle(DeskButtonStyle())
+                .buttonStyle(DeskButtonStyle(prominent: delegation.readyToClose))
                 Button(s(delegation.opensInTerminal ? .continueInTerminal : .openInOpenCode)) { store.takeover(delegation) }
-                    .buttonStyle(DeskButtonStyle(prominent: isLimit))
+                    .buttonStyle(DeskButtonStyle(prominent: isLimit && !delegation.readyToClose))
             }
             .disabled(busy)
         }

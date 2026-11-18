@@ -619,6 +619,12 @@ class Desk:
 
     def reconcile(self):
         """Catch up on what happened while the daemon was down."""
+        # Cards left waiting on a handoff that was closed since (an older build could leave them).
+        for card in self.db().execute(
+            "select c.id from cards c join delegations d on d.id = c.delegation_id "
+            "where c.resolved_at is null and d.state = 'closed' and c.kind != 'closed'"
+        ).fetchall():
+            ledger.resolve_card(self.db(), card["id"], {"action": "closed"})
         installed = int(self.db().execute("select value from kv where key = 'installed_at'").fetchone()[0])
         try:
             service = Service()

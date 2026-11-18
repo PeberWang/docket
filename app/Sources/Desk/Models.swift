@@ -27,6 +27,9 @@ struct Delegation: Decodable, Sendable, Identifiable {
 
     var phase: Phase { Phase(rawValue: state) ?? .unknown }
 
+    /// A card with nothing to decide: the panel says so instead of showing an empty question.
+    var readyToClose: Bool { state == "awaiting" && card?.open == true && (card?.decisions.isEmpty ?? false) }
+
     /// OpenCode tasks open in OpenCode; CLI agents (Claude Code, Codex) continue in Terminal.
     var opensInTerminal: Bool { engine == "claude" || engine == "codex" }
 }

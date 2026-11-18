@@ -163,10 +163,11 @@ struct DeskButtonStyle: ButtonStyle {
 struct StateBadge: View {
     let phase: Phase
     let s: Strings
+    var readyToClose: Bool = false
 
     var body: some View {
         let tint = phase == .awaiting ? Color.accentColor : Color.secondary
-        Text(s.phase(phase))
+        Text(readyToClose ? s(.phaseReadyToClose) : s.phase(phase))
             .lineLimit(1)
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(tint)

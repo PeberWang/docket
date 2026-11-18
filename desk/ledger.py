@@ -197,8 +197,14 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
     ).fetchall()
     out = []
     for row in rows:
-        card = open_card(conn, row["id"])
-        last = card or conn.execute("select * from cards where delegation_id = ? order by id desc limit 1", (row["id"],)).fetchone()
+        if row["state"] == "closed":  # a closed handoff shows its conclusion, never an older card left behind
+            card = conn.execute(
+                "select * from cards where delegation_id = ? and kind = 'closed' order by id desc limit 1", (row["id"],)
+            ).fetchone()
+            last = card or conn.execute("select * from cards where delegation_id = ? order by id desc limit 1", (row["id"],)).fetchone()
+        else:
+            card = open_card(conn, row["id"])
+            last = card or conn.execute("select * from cards where delegation_id = ? order by id desc limit 1", (row["id"],)).fetchone()
         answer = json.loads(last["resolution"]) if last and last["resolution"] else {}
         out.append(
             {

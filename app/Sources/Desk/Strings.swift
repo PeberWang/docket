@@ -29,10 +29,10 @@ enum StringKey: Sendable {
     case panelTitle, needYouOne, needYouMany, noHandoffs, serviceNotRunning
     case showDeskHelp, hideDeskHelp, statusTooltip
     // States
-    case phaseAwaiting, phasePending, phaseRunning, phaseTakenOver, phaseClosed, phaseUnknown
+    case phaseAwaiting, phaseReadyToClose, phasePending, phaseRunning, phaseTakenOver, phaseClosed, phaseUnknown
     case activityRunning, activityPending
     // Card
-    case round, queued, metaSeparator, justNow
+    case round, queued, metaSeparator, justNow, nothingToDecide
     case recommended, handledForYou
     case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
@@ -58,6 +58,8 @@ struct Strings: Sendable {
         .statusTooltip: ("OpenClaw Desk (⌥⌘D)", "案头（⌥⌘D）"),
 
         .phaseAwaiting: ("Waiting on you", "待你定"),
+        .phaseReadyToClose: ("Ready to close", "待结案"),
+        .nothingToDecide: ("Nothing needs a decision. Close it when you are happy.", "没有要你定的事，确认没问题就可以结案。"),
         .phasePending: ("Writing brief", "处理中"),
         .phaseRunning: ("Working", "执行中"),
         .phaseTakenOver: ("With you", "已接管"),
