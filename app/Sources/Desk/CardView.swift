@@ -22,7 +22,7 @@ struct CardView: View {
 
             // The run's result (or the conclusion), set apart on its own tinted block.
             if phase == .closed, let conclusion = card?.conclusion, !conclusion.isEmpty {
-                summaryBlock(conclusion)
+                summaryBlock(conclusion).opacity(0.6)  // same weight as a taken-over card: quiet
             } else if let progress = card?.progress, !progress.isEmpty {
                 summaryBlock(progress)
                     .opacity(answered ? 0.6 : 1)
