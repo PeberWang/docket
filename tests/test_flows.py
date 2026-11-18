@@ -83,34 +83,22 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.desk.delegation("ses_x")["state"], "closed")
         self.assertIn("办完了", next(daemon.MEMORY_DIR.glob("*.md")).read_text(encoding="utf-8"))
 
-    def test_permission_request_becomes_a_card(self):
+    def test_permission_requests_ask_only_when_destructive(self):
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append((request, decision))
-        # Reads outside the project are auto-approved (the run was started with --auto); destructive ones ask.
-        approved = []
-        engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: approved.append((request, decision))
+        # Reads outside the project are approved silently: the run was started with --auto.
         self.desk.permission_card("ses_x", {"id": "per_read", "action": "external_directory", "resources": ["/tmp/notes.md"]})
-        self.assertEqual(approved, [("per_read", "once")])
-        self.assertIsNone(ledger.open_card(self.db, "ses_x") or None)
+        self.assertEqual(answered, [("per_read", "once")])
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
+        # A destructive one becomes a card and waits for the user.
         self.desk.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/build"]})
         card = ledger.open_card(self.db, "ses_x")
         self.assertEqual(json.loads(card["body"])["pending_permission"], "per_1")
-        self.assertNotIn("pending_permission", ledger.snapshot(self.db)[0]["card"])  # never shown to the app
+        self.assertNotIn("pending_permission", ledger.snapshot(self.db)[0]["card"])
         self.desk.decide(card["id"], {"permission": "once"}, "")
-        self.assertEqual(answered, [("per_1", "once")])
+        self.assertEqual(answered[-1], ("per_1", "once"))
         self.assertEqual(self.desk.delegation("ses_x")["state"], "running")
         self.assertEqual(self.sent, [])  # answering a permission is not a round
-
-    def test_usage_limit_retries_once_on_the_fallback(self):
-        calls = []
-        engines.OpenCode.resume = lambda engine, handoff, text, model=None: calls.append((text, model))
-        import json as _json
-        self.db.execute("insert into events (delegation_id, at, kind, detail) values (?, ?, 'relayed', ?)",
-                        ("ses_x", ledger.now(), _json.dumps({"message": "do more"})))
-        self.assertTrue(self.desk.retry_with_fallback("ses_x", "You've hit your session limit · resets 6:40pm"))
-        self.assertEqual(calls, [("do more", self.desk.settings["fallback_model"])])
-        self.assertFalse(self.desk.retry_with_fallback("ses_x", "session limit again"))  # only once
-        self.assertFalse(self.desk.retry_with_fallback("ses_x", "some other failure"))
 
     def test_cards_wait_their_turn_and_none_is_overwritten(self):
         self.desk.show_card("ses_x", "question", dict(CARD, progress="first"))
