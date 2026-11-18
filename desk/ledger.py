@@ -192,7 +192,7 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
     since = now() - closed_hours * 3600_000
     rows = conn.execute(
         "select * from delegations where state not in ('closed', 'taken_over')"
-        " or (state = 'closed' and updated_at >= ?) order by "
+        " or updated_at >= ? order by "
         "case state when 'awaiting' then 0 when 'pending' then 1 when 'running' then 2 when 'taken_over' then 3 else 4 end, updated_at desc",
         (since,),
     ).fetchall()
