@@ -1,6 +1,6 @@
 # Design
 
-OpenClaw Desk sits between three rhythms. The chat is synchronous: you and your agent take turns, and a question you have not answered holds up the thread. The coding agent is parallel: each handoff moves forward in the background, in its own session. The Desk is the rhythm that can be late: a brief of one sentence and at most two questions, each with a recommended option, waits on the panel until you have a minute. Everything that needs you, but not now, lands there. The sections below explain why this layer is needed and where its boundaries lie.
+OpenClaw Docket sits between three rhythms. The chat is synchronous: you and your agent take turns, and a question you have not answered holds up the thread. The coding agent is parallel: each handoff moves forward in the background, in its own session. Docket is the rhythm that can be late: a brief of one sentence and at most two questions, each with a recommended option, waits on the panel until you have a minute. Everything that needs you, but not now, lands there. The sections below explain why this layer is needed and where its boundaries lie.
 
 ## The gap
 
@@ -13,11 +13,11 @@ Hand work from the first to the second and a third kind of thread appears. It is
 - **In the chat it gets in the way.** A question left unanswered blocks the conversation. Reports pile up between everything else. The agent's habit of expanding is exactly wrong here: you handed the work off so you would not have to think about the details.
 - **In the coding agent it asks too much.** Opening the session means reading the transcript, and in practice you end up steering technical details yourself.
 
-OpenClaw Desk gives this thread its own place: a quiet panel on the Mac where each handoff waits as a short brief until you decide.
+OpenClaw Docket gives this thread its own place: a quiet panel on the Mac where each handoff waits as a short brief until you decide.
 
 ## Three flows
 
-| | Chat with your agent | The Desk | Coding agent session |
+| | Chat with your agent | Docket | Coding agent session |
 |---|---|---|---|
 | Unit | an ongoing conversation | one handoff, with a start and an end | one complete delivery |
 | Who talks more | the agent expands | both keep it short | you specify, it builds |
@@ -25,13 +25,13 @@ OpenClaw Desk gives this thread its own place: a quiet panel on the Mac where ea
 | Rhythm | synchronous; unanswered means stuck | asynchronous; it can wait | start it and let go |
 | Rounds | open-ended | at most 3 | one, plus follow-ups |
 
-The Desk is closer to an in-tray than to a chat. A brief states where things stand in one sentence and asks for at most two decisions, each with a recommended option. You answer with a click or one line.
+Docket is closer to an in-tray than to a chat. A brief states where things stand in one sentence and asks for at most two decisions, each with a recommended option. You answer with a click or one line.
 
 ## Three boundaries
 
-- **Chat → Desk.** The moment the agent hands work off. The chat gets one line ("Handed off: …") and does not bring the work up again.
-- **Desk → coding agent.** After three rounds, or whenever you choose, the Desk hands the session to you: OpenCode opens it, and for Claude Code or Codex a Terminal window opens with the resume command. Tasks that need your hands, such as tuning how something feels, should end up here early.
-- **Desk → chat.** When a handoff is closed, a one-sentence conclusion is written to the agent's daily memory. The process moves out of the chat; the result comes back.
+- **Chat → Docket.** The moment the agent hands work off. The chat gets one line ("Handed off: …") and does not bring the work up again.
+- **Docket → coding agent.** After three rounds, or whenever you choose, Docket hands the session to you: OpenCode opens it, and for Claude Code or Codex a Terminal window opens with the resume command. Tasks that need your hands, such as tuning how something feels, should end up here early.
+- **Docket → chat.** When a handoff is closed, a one-sentence conclusion is written to the agent's daily memory. The process moves out of the chat; the result comes back.
 
 ## The brief
 

@@ -1,14 +1,14 @@
-# OpenClaw Desk
+# OpenClaw Docket
 
-*A panel between your OpenClaw chat and the coding agent, for the decisions that can wait.*
+*Everything that needs your ruling, waiting in order.*
 
-A chat is synchronous: one question you have not answered holds up the whole conversation. A coding agent (OpenCode, Claude Code or Codex) is parallel: handed-off tasks move forward in the background, each on its own. Between the two there is no layer where a judgment can pause, pile up and arrive late. OpenClaw Desk is that layer, a native macOS panel. Everything that needs you, but not now, lands there.
+A chat is synchronous: one question you have not answered holds up the whole conversation. A coding agent (OpenCode, Claude Code or Codex) is parallel: handed-off tasks move forward in the background, each on its own. Between the two there is no layer where a judgment can pause, pile up and arrive late. OpenClaw Docket is that layer, a native macOS panel. Everything that needs you, but not now, lands there.
 
-<p align="center"><img src="docs/panel-en.png" width="380" alt="The Desk panel: a brief with two decisions and recommended options"></p>
+<p align="center"><img src="docs/panel-en.png" width="380" alt="The Docket panel: a brief with two decisions and recommended options"></p>
 
 ## Three rhythms
 
-Each kind of work keeps its own pace: the chat answers at once, the coding agent works in parallel, and the decisions wait on the Desk until you get to them.
+Each kind of work keeps its own pace: the chat answers at once, the coding agent works in parallel, and the decisions wait on Docket until you get to them.
 
 ### The chat: synchronous
 
@@ -20,9 +20,9 @@ What you said still reaches the work in your own words, not a paraphrase. A judg
 
 Each handoff runs in the background in its own coding-agent session, and each one has its own project-manager agent. When the coding agent finishes a run, the PM reads the result, checks the delivery itself (opens the files, runs the unit tests) and decides the technical details on its own. Only what truly needs you reaches the panel.
 
-Back-and-forth through the Desk is capped at three relayed decisions. After that, or whenever you like, one button opens the session in OpenCode, or in Terminal for Claude Code and Codex, and you take it from there.
+Back-and-forth through Docket is capped at three relayed decisions. After that, or whenever you like, one button opens the session in OpenCode, or in Terminal for Claude Code and Codex, and you take it from there.
 
-### The Desk: it can be late
+### Docket: it can be late
 
 A brief arrives when the work reaches a decision and waits until you have a minute. The panel rests as a small pill on the screen edge (⌥⌘D to open), with no notifications and no sounds.
 
@@ -32,15 +32,15 @@ A brief is answered in a second: one sentence on where things stand, at most two
 
 ### Just keep following up in the chat
 
-A chat is synchronous: a question you have not answered blocks the conversation, and every report lands between everything else you are doing. Your agent's habit of expanding on things is exactly wrong for a task you handed off so you would not have to think about the details. The Desk is asynchronous and terse on purpose.
+A chat is synchronous: a question you have not answered blocks the conversation, and every report lands between everything else you are doing. Your agent's habit of expanding on things is exactly wrong for a task you handed off so you would not have to think about the details. Docket is asynchronous and terse on purpose.
 
 ### Just open the session in OpenCode, or use an [inbox](https://github.com/PeberWang/opencode-openclaw-inbox)
 
-That means reading the coding agent's transcript and, in practice, steering technical details yourself. An inbox tells you a session exists; the Desk tells you what was decided and asks only what is left. The two fit together: start with the inbox if all you want is to see dispatched sessions and jump into them; the Desk is the same idea carried further, with a PM per handoff. They share the dispatch convention, and the Desk can be the only entry point.
+That means reading the coding agent's transcript and, in practice, steering technical details yourself. An inbox tells you a session exists; Docket tells you what was decided and asks only what is left. The two fit together: start with the inbox if all you want is to see dispatched sessions and jump into them; Docket is the same idea carried further, with a PM per handoff. They share the dispatch convention, and Docket can be the only entry point.
 
 ### Just let the agent run and check the result later
 
-You would get a long technical summary written by the agent that did the work. The Desk's PM is a second agent that verifies the delivery and turns it into a decision. Its output is checked in code: lengths, number of questions, exactly one recommended option.
+You would get a long technical summary written by the agent that did the work. Docket's PM is a second agent that verifies the delivery and turns it into a decision. Its output is checked in code: lengths, number of questions, exactly one recommended option.
 
 ### Just tell the coding agent to write shorter summaries
 
@@ -53,14 +53,14 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
                 │                                                │
                 │ transcript (read-only)                         │ run ended (events or process exit)
                 ▼                                                ▼
-        ┌───────────────────────── Desk service (launchd) ─────────────────────────┐
+        ┌──────────────────────── Docket service (launchd) ────────────────────────┐
         │ judge (Jev): your words that belong to the task; later mentions in chat   │
         │ ledger (SQLite): handoffs, briefs, decisions, rounds                      │
         │ PM: one OpenClaw session per handoff, woken only when a run ends          │
         │ relays your decision to the coding agent, counts rounds (max 3)           │
         └───────────────────────────────────────────────────────────────────────────┘
                                          ▲
-                              Desk.app: menu bar + panel
+                             Docket.app: menu bar + panel
 ```
 
 - Code keeps watch, the model only judges: the PM is not a loop. It is woken once per finished run with `openclaw agent --session-key agent:main:desk-<id>`, and nothing it writes goes to your chat.
@@ -74,15 +74,15 @@ The full rationale is in [docs/design.md](docs/design.md).
 Requirements: macOS 14 or later, Command Line Tools (`xcode-select --install`), [OpenClaw](https://openclaw.ai), and at least one coding agent: [OpenCode](https://opencode.ai) Desktop with the [inbox plugin](https://github.com/PeberWang/opencode-openclaw-inbox) v0.4.0 or later, or the [Claude Code](https://code.claude.com) / [Codex](https://developers.openai.com/codex) CLI, logged in.
 
 ```sh
-git clone https://github.com/PeberWang/openclaw-desk.git
-cd openclaw-desk
+git clone https://github.com/PeberWang/openclaw-docket.git
+cd openclaw-docket
 bash scripts/install.sh
 ```
 
 The script builds the app into `~/Applications`, starts the service and the app as launch agents, and installs the `desk-dispatch` skill into OpenClaw. Then:
 
-1. **Tell OpenClaw to hand off through the Desk.** Add to `~/.openclaw/workspace/AGENTS.md`:
-   > Hand coding work off with the desk-dispatch skill. After dispatching, reply with one line and leave the follow-up to the Desk.
+1. **Tell OpenClaw to hand off through Docket.** Add to `~/.openclaw/workspace/AGENTS.md`:
+   > Hand coding work off with the desk-dispatch skill. After dispatching, reply with one line and leave the follow-up to Docket.
 2. **Optional: the judge.** Get a key at [console.typesafe.ai](https://console.typesafe.ai) and put it in `TYPESAFE_API_KEY` or in `~/.openclaw/workspace/secrets.json` as `"typesafe": {"api_key": "…"}`. Without it, handoffs work, without picked background and chat mentions.
 
 To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too).
@@ -102,7 +102,7 @@ To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `watch` | `["*"]` | OpenClaw sessions whose handoffs go to the Desk (`fnmatch` patterns), e.g. `["agent:main:main"]` |
+| `watch` | `["*"]` | OpenClaw sessions whose handoffs go to Docket (`fnmatch` patterns), e.g. `["agent:main:main"]` |
 | `locale` | `"auto"` | `"auto"` follows macOS; `"en"` or `"zh"` |
 | `engine` | `"opencode"` | default coding agent: `opencode`, `claude` or `codex` |
 | `pm_model` | `null` | model for the PM sessions; `null` uses your OpenClaw default |

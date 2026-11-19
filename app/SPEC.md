@@ -1,4 +1,4 @@
-# Desk.app — native panel spec
+# Docket.app — native panel spec
 
 The app is only a face. All logic lives in the daemon (`desk/`, Python). The app reads
 state from the daemon's local HTTP API and posts the user's decisions back.
@@ -57,7 +57,7 @@ OpenCode Desktop to open the session. The app should also hide nothing else; a t
 delegation stays listed with a single "Open in OpenCode" button that calls the same endpoint.
 
 Errors: JSON `{"error": "…"}` with 4xx/5xx. If the daemon is unreachable, show a quiet
-"Desk service isn’t running" line instead of cards.
+"Docket service isn’t running" line instead of cards.
 
 ## UI
 
@@ -68,8 +68,8 @@ en/zh table (`Sources/Desk/Strings.swift`); the examples below give English with
 in brackets. Calm: no sounds, no notifications, no badges in red.
 
 **Menu bar** (`NSStatusItem`): template SF Symbol `tray` when nothing awaits, `tray.full`
-plus the count (`2`) when cards await. Click toggles the panel. Right-click: Show Desk /
-Hide Desk (显示面板 / 收起面板), Quit (退出).
+plus the count (`2`) when cards await. Click toggles the panel. Right-click: Show Panel /
+Collapse Panel (展开面板 / 收起面板), Quit (退出).
 
 **Panel** (`NSPanel`, `.nonactivatingPanel`, borderless, rounded, vibrancy material,
 `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`, does not steal focus
@@ -79,7 +79,7 @@ except when the user clicks into the reply field):
   screen, vertically centered, about 34×120 pt, showing the same tray symbol and the
   awaiting count in the accent color.
   Click → expand. It must never cover more than that pill.
-- **Expanded:** about 380×640 pt, docked to the right edge. Header: "Desk" (案头),
+- **Expanded:** about 380×640 pt, docked to the right edge. Header: "Docket" (案头),
   "2 need you" (2 件待你定), a collapse button. Empty list: "No handoffs" (暂无交办). Body: scrollable list of delegation cards. Esc or the collapse
   button → back to the pill. Global hotkey ⌥⌘D toggles (use a Carbon `RegisterEventHotKey`,
   no accessibility permission needed).
@@ -113,12 +113,12 @@ Refresh: poll `GET /api/state` every 2 s while expanded, every 10 s while collap
 
 SwiftPM executable, macOS 14+, Swift 6 toolchain from Command Line Tools (no Xcode).
 `app/Package.swift`, sources in `app/Sources/Desk/`. A script `app/build.sh` that runs
-`swift build -c release`, assembles `build/Desk.app` (Info.plist with
-`LSUIElement = true`, bundle id `io.github.peberwang.openclaw-desk`, name "OpenClaw Desk"; the
-bundle stays `Desk.app` with executable `Desk` because launchd points at it), ad-hoc signs it
+`swift build -c release`, assembles `build/Docket.app` (Info.plist with
+`LSUIElement = true`, bundle id `io.github.peberwang.openclaw-desk`, name "Docket"; the
+executable inside stays `Desk`, the Swift target name, and launchd points at it), ad-hoc signs it
 (`codesign -s - --force --deep`), and prints the path. No third-party packages.
 For development, `app/dev-daemon.py` is a tiny fake daemon serving the API above with two
 sample delegations (`--all` adds limit / taken over / closed, `--locale en|zh` picks the
 copy, `--discovery PATH` writes a separate discovery file). Point a debug build at it with
 launch arguments, which don't touch the installed app's preferences:
-`build/Desk.app/Contents/MacOS/Desk -debugDiscoveryFile <path> -debugStartExpanded YES`.
+`build/Docket.app/Contents/MacOS/Desk -debugDiscoveryFile <path> -debugStartExpanded YES`.
