@@ -21,6 +21,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
+from docket import dispatches
 from docket.ledger import HOME
 from docket.opencode import Service
 
@@ -71,9 +72,7 @@ class OpenCode(Engine):
         Service().session(handoff["id"])
         RUNS.mkdir(parents=True, exist_ok=True)
         out = RUNS / f"{handoff['id']}-{uuid.uuid4().hex[:8]}.out"
-        workdir = Path(handoff.get("directory") or Path.home()).expanduser()
-        if not workdir.is_dir():
-            raise RuntimeError(f"project directory not found: {workdir}")
+        workdir = dispatches.existing_dir(handoff.get("directory") or Path.home())
         with open(out, "wb") as stdout:
             subprocess.Popen(
                 ["opencode", "run", "-s", handoff["id"], *(["--model", model] if model else []), *self.args, text],
@@ -116,9 +115,7 @@ class Cli(Engine):
         RUNS.mkdir(parents=True, exist_ok=True)
         out = RUNS / f"{handoff['id']}-{uuid.uuid4().hex[:8]}.out"
         argv = self.command(handoff, prompt, first, out)
-        workdir = Path(handoff.get("directory") or Path.home()).expanduser()
-        if not workdir.is_dir():
-            raise RuntimeError(f"project directory not found: {workdir}")
+        workdir = dispatches.existing_dir(handoff.get("directory") or Path.home())
         with open(out, "wb") as stdout:
             process = subprocess.Popen(
                 argv,
@@ -137,7 +134,7 @@ class Cli(Engine):
         return ""  # comes from the run's output file
 
     def takeover(self, handoff):
-        directory = handoff.get("directory") or str(Path.home())
+        directory = str(dispatches.expand_dir(handoff.get("directory") or Path.home()))
         command = f"cd {shlex.quote(directory)} && {self.resume_command(handoff)}"
         script = command.replace("\\", "\\\\").replace('"', '\\"')
         subprocess.run(

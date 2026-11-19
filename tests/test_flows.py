@@ -12,11 +12,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ["DOCKET_HOME"] = tempfile.mkdtemp(prefix="docket-unit-")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from docket import daemon, engines, ledger, pm  # noqa: E402
+from docket import daemon, dispatches, engines, ledger, pm  # noqa: E402
 
 CARD = {"kind": "report", "progress": "p", "decisions": [], "decided_for_you": []}
 
@@ -176,11 +177,95 @@ class Flows(unittest.TestCase):
         self.docket.decide(permission["id"], {"permission": "once"}, "")
         self.assertEqual(answered, ["once"])
 
+    def register(self, command: str, home: Path):
+        """Run maybe_register on a dispatch command as OpenClaw would have written it."""
+        parsed = dispatches.parse(command)
+        found = {"session_key": "k", "session_id": "s", "seq": 1, "time": 0, "directory": parsed["directory"],
+                 "directory_raw": parsed["directory_raw"], "brief": "", "instruction": parsed["instruction"]}
+
+        class Session:
+            def session(self, sid):
+                return {"title": f"🦞 {parsed['title']}", "time": {"created": 1}, "location": {}}
+
+        daemon.Service = Session
+        with mock.patch.dict(os.environ, {"HOME": str(home)}), \
+                mock.patch.object(daemon.registry, "find_dispatch", lambda *a: found), \
+                mock.patch.object(daemon.registry, "build_context", lambda *a: []):
+            self.docket.maybe_register("ses_new", attempts=1)
+        return self.docket.delegation("ses_new")
+
+    def test_home_variable_in_dispatch_directory_is_stored_expanded(self):
+        home = Path(tempfile.mkdtemp()).resolve()
+        (home / "Desktop/Code工作区/proj").mkdir(parents=True)
+        row = self.register('cd "$HOME/Desktop/Code工作区/proj" && opencode-dispatch --detach --auto --title "🦞 T" "go"', home)
+        self.assertEqual(row["directory"], str(home / "Desktop/Code工作区/proj"))
+        self.assertEqual(row["state"], "running")
+        self.assertIsNone(ledger.open_card(self.db, "ses_new"))
+
+    def test_missing_dispatch_directory_fails_visibly(self):
+        home = Path(tempfile.mkdtemp()).resolve()
+        row = self.register('cd "$HOME/nope" && opencode-dispatch --detach --title "🦞 T" "go"', home)
+        self.assertIsNone(row["directory"])  # nothing unrunnable is stored
+        self.assertEqual(row["state"], "closed")
+        card = ledger.open_card(self.db, "ses_new")
+        self.assertEqual(card["kind"], "failure")
+        progress = json.loads(card["body"])["progress"]
+        self.assertIn("$HOME/nope", progress)
+        self.assertIn(str(home / "nope"), progress)
+        event = self.db.execute("select detail from events where delegation_id = 'ses_new' and kind = 'directory:missing'").fetchone()
+        self.assertEqual(json.loads(event[0]), {"raw": "$HOME/nope", "expanded": str(home / "nope")})
+
+    def test_rows_stored_with_a_literal_home_still_resolve(self):
+        home = Path(tempfile.mkdtemp()).resolve()
+        (home / "proj").mkdir()
+        ledger.add_delegation(self.db, id="ses_old", title="o", directory="$HOME/proj", source_key=None, dispatch_seq=None, dispatched_at=0, brief="", context=[])
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            self.assertEqual(self.docket.project_dir(self.docket.delegation("ses_old")), home / "proj")
+
     def test_card_validation(self):
         self.assertEqual(pm.validate_card(dict(CARD)), [])
         bad = {"kind": "x", "progress": "", "decisions": [{"id": "d1", "question": "q", "options": [{"id": "a", "label": "a"}]}]}
         self.assertEqual(len(pm.validate_card(bad)), 3)
         self.assertEqual(pm.extract_json('好\n```json\n{"action": "close", "conclusion": "ok"}\n```')["action"], "close")
+
+
+class Directories(unittest.TestCase):
+    """`cd "$HOME/…"` in a dispatch once reached the ledger verbatim and failed at resume."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp()).resolve()
+        (self.home / "x").mkdir()
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def directory(self, cd: str):
+        return dispatches.parse(f'cd {cd} && opencode-dispatch --detach --title "🦞 T" "go"')["directory"]
+
+    def test_home_variable_expands(self):
+        for cd in ('"$HOME/x"', "$HOME/x", "'${HOME}/x'", '"${HOME}/x/"'):
+            with self.subTest(cd=cd):
+                self.assertEqual(self.directory(cd), str(self.home / "x"))
+        self.assertEqual(dispatches.parse('cd "$HOME/x" && opencode-dispatch --title "T" "go"')["directory_raw"], "$HOME/x")
+
+    def test_tilde_still_expands(self):
+        self.assertEqual(self.directory("~/x"), str(self.home / "x"))
+        self.assertEqual(dispatches.existing_dir("~/x"), self.home / "x")
+
+    def test_missing_directory_names_both_paths(self):
+        with self.assertRaises(dispatches.MissingDirectory) as caught:
+            dispatches.existing_dir("$HOME/nope")
+        self.assertEqual((caught.exception.raw, caught.exception.expanded), ("$HOME/nope", str(self.home / "nope")))
+        self.assertIn("$HOME/nope -> " + str(self.home / "nope"), str(caught.exception))
+
+    def test_other_variables_are_not_mistaken_for_home(self):
+        with mock.patch.dict(os.environ, {"HOMEDIR": "/elsewhere"}):
+            self.assertEqual(dispatches.expand_dir("$HOMEDIR/x"), Path("/elsewhere/x").resolve())
+
+    def test_brief_under_a_home_variable_is_read(self):
+        (self.home / "x/BRIEF.md").write_text("brief", encoding="utf-8")
+        self.assertEqual(dispatches.read_brief(str(self.home / "x"), "BRIEF.md"), "brief")
+        self.assertEqual(dispatches.read_brief(None, "$HOME/x/BRIEF.md"), "brief")
 
 
 if __name__ == "__main__":

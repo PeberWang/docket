@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from docket import config as docket_config  # noqa: E402
-from docket import engines, i18n, ledger, pm, registry  # noqa: E402
+from docket import dispatches, engines, i18n, ledger, pm, registry  # noqa: E402
 from docket.opencode import Service  # noqa: E402
 from judge import jev, relevance  # noqa: E402
 from judge.transcript import connect as openclaw_connect  # noqa: E402
@@ -78,6 +78,9 @@ class Docket:
             with self.lock(delegation_id):
                 try:
                     job(*args)
+                except dispatches.MissingDirectory as error:
+                    log.warning("project directory not found for %s: %r -> %s", delegation_id, error.raw, error.expanded)
+                    self.fail_card(delegation_id, self.t("missing_dir", raw=error.raw, expanded=error.expanded))
                 except Exception as error:  # a PM failure must not take the daemon down
                     log.exception("job failed for %s", delegation_id)
                     self.fail_card(delegation_id, self.t("failed", error=error))
@@ -120,6 +123,11 @@ class Docket:
             raise ValueError(f"{engine_name} is not a CLI engine")
         import uuid
 
+        try:
+            directory = str(dispatches.existing_dir(directory))
+        except dispatches.MissingDirectory as error:
+            log.warning("dispatch directory not found: %r -> %s", error.raw, error.expanded)
+            raise ValueError(self.t("missing_dir", raw=error.raw, expanded=error.expanded)) from error
         handoff_id = f"{engine.name}_{uuid.uuid4().hex[:20]}"
         session = str(uuid.uuid4()) if engine.name == "claude" else None
         ledger.add_delegation(
@@ -241,17 +249,29 @@ class Docket:
         except Exception as error:
             log.warning("judge failed for %s: %s", session_id, error)
             context = []
+        raw = dispatch.get("directory_raw") or dispatch["directory"] or (session.get("location") or {}).get("directory")
+        missing = None
+        try:
+            directory = str(dispatches.existing_dir(raw)) if raw else None
+        except dispatches.MissingDirectory as error:
+            directory, missing = None, error  # never store a path nothing can run in
         ledger.add_delegation(
             db,
             id=session_id,
             title=name,
-            directory=dispatch["directory"] or (session.get("location") or {}).get("directory"),
+            directory=directory,
             source_key=dispatch["session_key"],
             dispatch_seq=dispatch["seq"],
             dispatched_at=dispatch["time"],
             brief=dispatch["brief"],
             context=context,
         )
+        if missing:
+            log.warning("dispatch directory not found for %s: %r -> %s", session_id, missing.raw, missing.expanded)
+            ledger.log(db, session_id, "directory:missing", {"raw": missing.raw, "expanded": missing.expanded})
+            self.show_card(session_id, "failure", {"progress": self.t("missing_dir", raw=missing.raw, expanded=missing.expanded), "decisions": [], "decided_for_you": []})
+            ledger.set_state(db, session_id, "closed")
+            return
         log.info("registered %s (%s) with %d context messages", name, session_id, len(context))
 
     # ---------- OpenCode finished a run ----------
@@ -627,7 +647,8 @@ class Docket:
         if not directory:
             args = self.engine(row).args or []
             directory = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in ("--dir", "--cwd", "-C")), None)
-        return Path(directory).expanduser().resolve() if directory else None
+        # Rows stored before variables were expanded still hold "$HOME/…": read them the same way.
+        return dispatches.expand_dir(directory) if directory else None
 
     def source_tool(self, session_id: str, source: dict | None) -> str | None:
         """The tool call behind a request: OpenCode's external_directory says which folder, not what for."""

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 
 from docket import config as docket_config
 from docket import dispatches
@@ -22,7 +21,7 @@ CONTEXT_MESSAGES = 80
 
 
 def find_dispatch(title: str, created_ms: int, settings: dict):
-    """Return {"session_key", "session_id", "seq", "time", "directory", "brief", "instruction"} or None."""
+    """Return {"session_key", "session_id", "seq", "time", "directory", "directory_raw", "brief", "instruction"} or None."""
     conn = openclaw_connect()
     try:
         rows = conn.execute(
@@ -48,7 +47,8 @@ def find_dispatch(title: str, created_ms: int, settings: dict):
                     "session_id": session_id,
                     "seq": seq,
                     "time": created,
-                    "directory": os.path.expanduser(parsed["directory"]) if parsed["directory"] else None,
+                    "directory": parsed["directory"],  # already expanded; checked when it is stored
+                    "directory_raw": parsed["directory_raw"],
                     "brief": dispatches.read_brief(parsed["directory"], parsed["brief_path"]),
                     "instruction": parsed["instruction"],
                 }
