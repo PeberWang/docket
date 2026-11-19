@@ -98,7 +98,13 @@ final class PanelController {
         apply()
     }
 
+    /// Hidden wins: the window is ordered out entirely — not moved offscreen, not faded —
+    /// so the edge of the screen is free for other windows and no click-through ghost remains.
     private func apply() {
+        if store.hidden {
+            if panel.isVisible { panel.orderOut(nil) }
+            return
+        }
         let expanded = store.expanded
         let summoned = appliedExpanded != expanded
         if summoned {

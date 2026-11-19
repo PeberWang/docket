@@ -37,7 +37,7 @@ enum StringKey: Sendable {
     case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
     // Menu bar
-    case showDesk, hideDesk, quit
+    case showDesk, hideDesk, hidePanel, showPanel, panelHidden, quit
     // Permission popup
     case popupNotice, popupHowTo, copySnippet, copied, dismiss
     // Errors
@@ -87,8 +87,11 @@ struct Strings: Sendable {
         .openInOpenCode: ("Open in OpenCode", "在 OpenCode 打开"),
         .continueInTerminal: ("Continue in Terminal", "在终端接管"),
 
-        .showDesk: ("Show Desk", "显示面板"),
-        .hideDesk: ("Hide Desk", "收起面板"),
+        .showDesk: ("Show Panel", "展开面板"),
+        .hideDesk: ("Collapse Panel", "收起面板"),
+        .hidePanel: ("Hide Sidebar", "隐藏右侧条带"),
+        .showPanel: ("Restore Sidebar", "恢复右侧条带"),
+        .panelHidden: ("Panel hidden", "面板已隐藏"),
         .quit: ("Quit", "退出"),
 
         .popupNotice: ("OpenCode is asking for a permission, and the popup that answers it isn’t installed.",

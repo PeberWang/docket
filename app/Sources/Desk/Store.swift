@@ -19,6 +19,15 @@ final class Store: ObservableObject {
             restartPolling()
         }
     }
+    /// Whether the strip is withdrawn from the screen entirely. Persisted under `uiPanelHidden`
+    /// so it stays hidden across launches; the menu bar item remains either way.
+    @Published var hidden = UserDefaults.standard.bool(forKey: "uiPanelHidden") {
+        didSet {
+            guard oldValue != hidden else { return }
+            UserDefaults.standard.set(hidden, forKey: "uiPanelHidden")
+            notify()
+        }
+    }
     @Published private(set) var delegations: [Delegation] = []
     @Published private(set) var awaiting = 0
     @Published private(set) var connection: Connection = .unknown
@@ -60,7 +69,17 @@ final class Store: ObservableObject {
     }
 
     func toggle() {
-        expanded.toggle()
+        if hidden { hidden = false } else { expanded.toggle() }
+    }
+
+    /// Collapse first, then withdraw the strip, so hiding never leaves a half-open panel.
+    func hide() {
+        if expanded { expanded = false }
+        hidden = true
+    }
+
+    func toggleHidden() {
+        if hidden { hidden = false } else { hide() }
     }
 
     // MARK: Polling

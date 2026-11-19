@@ -21,7 +21,7 @@ final class StatusItemController: NSObject {
     private func update() {
         guard let button = item.button else { return }
         let s = store.s
-        let name = store.awaiting > 0 ? "tray.full" : "tray"
+        let name = store.hidden ? "line.3.horizontal" : (store.awaiting > 0 ? "tray.full" : "tray")
         if name != symbolName {
             symbolName = name
             let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
@@ -30,11 +30,17 @@ final class StatusItemController: NSObject {
             image?.isTemplate = true
             button.image = image
         }
-        let title = store.awaiting > 0 ? "\(store.awaiting)" : ""
+        // Hidden means quiet: no count on the icon until the strip comes back.
+        let count = store.hidden ? 0 : store.awaiting
+        let title = count > 0 ? "\(count)" : ""
         if button.title != title { button.title = title }
         button.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
-        button.toolTip = store.connection == .down ? s(.serviceNotRunning) : s(.statusTooltip)
-        button.setAccessibilityLabel(store.awaiting > 0 ? "\(s(.panelTitle)), \(s.needYou(store.awaiting))" : s(.panelTitle))
+        if store.hidden {
+            button.toolTip = s(.panelHidden)
+        } else {
+            button.toolTip = store.connection == .down ? s(.serviceNotRunning) : s(.statusTooltip)
+        }
+        button.setAccessibilityLabel(count > 0 ? "\(s(.panelTitle)), \(s.needYou(count))" : s(.panelTitle))
     }
 
     @objc private func clicked(_ sender: NSStatusBarButton) {
@@ -53,6 +59,9 @@ final class StatusItemController: NSObject {
         toggle.keyEquivalentModifierMask = [.command, .option]
         toggle.target = self
         menu.addItem(toggle)
+        let panelItem = NSMenuItem(title: store.hidden ? s(.showPanel) : s(.hidePanel), action: #selector(toggleHiddenPanel), keyEquivalent: "")
+        panelItem.target = self
+        menu.addItem(panelItem)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: s(.quit), action: #selector(quit), keyEquivalent: "")
         quit.target = self
@@ -65,6 +74,10 @@ final class StatusItemController: NSObject {
 
     @objc private func togglePanel() {
         store.toggle()
+    }
+
+    @objc private func toggleHiddenPanel() {
+        store.toggleHidden()
     }
 
     @objc private func quit() {
