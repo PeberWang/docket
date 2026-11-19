@@ -38,6 +38,9 @@ DISCOVERY = ledger.HOME / "daemon.json"
 MEMORY_DIR = Path.home() / ".openclaw/workspace/memory"
 MENTION_POLL = 5
 LIVE = ("running", "pending", "awaiting")
+# OpenCode permission actions and tool names, sorted by whether they can change files.
+READ_ACTIONS = {"read", "glob", "grep", "list"}
+WRITE_ACTIONS = {"edit", "write", "patch", "apply_patch", "multiedit"}
 
 log = logging.getLogger("docket")
 
@@ -618,6 +621,64 @@ class Docket:
         lowered = resources.lower()
         return any(marker in lowered for marker in ("rm -rf", "rm ", "sudo ", "chmod -r", "mv ", "trash", "/etc/", "/usr/", "/system/"))
 
+    def project_dir(self, row: dict) -> Path | None:
+        """The handoff's own directory, never the whole Code workspace around it."""
+        directory = row.get("directory")
+        if not directory:
+            args = self.engine(row).args or []
+            directory = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in ("--dir", "--cwd", "-C")), None)
+        return Path(directory).expanduser().resolve() if directory else None
+
+    def source_tool(self, session_id: str, source: dict | None) -> str | None:
+        """The tool call behind a request: OpenCode's external_directory says which folder, not what for."""
+        if not source or source.get("type") != "tool":
+            return None
+        try:
+            for message in Service().messages(session_id, limit=10):
+                for part in message.get("content") or []:
+                    if part.get("type") == "tool" and part.get("id") == source.get("id"):
+                        return part.get("name")
+        except Exception as error:
+            log.debug("tool lookup failed: %s", error)
+        return None
+
+    def permission_tier(self, session_id: str, row: dict, request: dict) -> tuple[str, str]:
+        """("auto" | "ask", reason). Interrupting the user is budgeted: only for writes and deletes
+        the machine cannot vouch for. Anything it cannot place is treated as dangerous."""
+        action = request.get("action")
+        raw = [str(r) for r in request.get("resources") or []]
+        if not raw:
+            return "ask", "no resources"
+        if action in READ_ACTIONS:
+            direction = "read"
+        elif action in WRITE_ACTIONS:
+            direction = "write"
+        elif action == "external_directory":
+            tool = self.source_tool(session_id, request.get("source"))
+            meta = request.get("metadata") or {}
+            direction = "write" if tool in WRITE_ACTIONS or meta.get("filepath") else "read" if tool in READ_ACTIONS else None
+        elif action == "shell":
+            direction = "shell"
+        else:
+            return "ask", f"unknown action {action}"
+        # Reading cannot destroy anything, so the path markers in _destructive (/etc/, /usr/) only guard changes.
+        if direction != "read" and self._destructive(" ".join(raw)):
+            return "ask", "destructive"
+        project = self.project_dir(row)
+        if direction == "shell":
+            # Paths a command reaches outside the project arrive as their own external_directory request.
+            return ("auto", "project shell") if project else ("ask", "shell, project unknown")
+        if project:
+            # External folders arrive as globs ("/etc/*"); drop the glob, keep a bare "/" as the root.
+            paths = [Path(p[:-2] if p.endswith("/*") and len(p) > 2 else p.rstrip("*") or ".").expanduser() for p in raw]
+            if all((path if path.is_absolute() else project / path).resolve().is_relative_to(project) for path in paths):
+                return "auto", f"inside project, {direction or 'unknown'}"
+        if direction == "read":
+            return "auto", "outside project, read only"
+        if direction is None:
+            return "ask", "outside project, direction unknown"
+        return "ask", "outside project, write"
+
     def permission_card(self, session_id: str, request: dict):
         """A run that still asks for permission must not wait silently: ask on Docket."""
         row = self.delegation(session_id)
@@ -625,22 +686,26 @@ class Docket:
             return
         t = self.t
         # A run started with --auto was an explicit "let it approve its own requests". OpenCode
-        # still asks for paths outside the project, and those requests expire within seconds:
-        # asking the user to race them never worked. Approve them here, except destructive ones.
+        # still asks for paths outside the project, and those requests expire within seconds.
+        # Approve what the machine can vouch for (anything in the project, reads anywhere) and
+        # log it; leave writes outside the project and deletes alive for the popup and the card.
         resources = " ".join(str(r) for r in request.get("resources") or [])
-        if "--auto" in (self.engine(row).args or []) and not self._destructive(resources):
+        tier, reason = self.permission_tier(session_id, row, request) if "--auto" in (self.engine(row).args or []) else ("ask", "not --auto")
+        entry = {"action": request.get("action"), "resources": resources[:200], "reason": reason}
+        if tier == "auto":
             try:
                 self.engine(row).answer_permission(row, request["id"], "once")
-                ledger.log(self.db(), session_id, "permission:auto", {"action": request.get("action"), "resources": resources[:200]})
+                ledger.log(self.db(), session_id, "permission:auto", entry)
                 return
             except Exception as error:
                 log.debug("auto-approve failed: %s", error)
+        ledger.log(self.db(), session_id, "permission:ask", entry)
         temp = any(marker in resources for marker in ("/tmp", "/var/folders", "TMPDIR"))
         delete = "rm -rf" in resources or "rm " in resources[:40]
         if delete:
             action = t("permission_delete_temp") if temp else t("permission_delete_files")
             risk = t("permission_risk_delete")
-        elif request.get("action") == "external_directory":
+        elif request.get("action") == "external_directory" and reason == "outside project, read only":
             action, risk = t("permission_read_files"), t("permission_risk_read")
         else:
             action, risk = t("permission_run_command"), t("permission_risk_change")

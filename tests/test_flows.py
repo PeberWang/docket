@@ -97,7 +97,8 @@ class Flows(unittest.TestCase):
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append((request, decision))
         # Reads outside the project are approved silently: the run was started with --auto.
-        self.docket.permission_card("ses_x", {"id": "per_read", "action": "external_directory", "resources": ["/tmp/notes.md"]})
+        self.docket.source_tool = lambda session_id, source: "read"
+        self.docket.permission_card("ses_x", {"id": "per_read", "action": "external_directory", "resources": ["/tmp/notes.md"], "source": {"type": "tool"}})
         self.assertEqual(answered, [("per_read", "once")])
         self.assertIsNone(ledger.open_card(self.db, "ses_x"))
         # A destructive one becomes a card and waits for the user.
@@ -109,6 +110,46 @@ class Flows(unittest.TestCase):
         self.assertEqual(answered[-1], ("per_1", "once"))
         self.assertEqual(self.docket.delegation("ses_x")["state"], "running")
         self.assertEqual(self.sent, [])  # answering a permission is not a round
+
+    def test_permission_tiers(self):
+        project = Path(tempfile.mkdtemp()) / "proj"
+        (project / "src").mkdir(parents=True)
+        (project.parent / "link").symlink_to(project)
+        ledger.add_delegation(self.db, id="ses_p", title="p", directory=str(project.parent / "link"), source_key=None, dispatch_seq=None, dispatched_at=0, brief="", context=[])
+        answered = []
+        engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append(request)
+        tools = {"t_read": "read", "t_write": "write", "t_shell": "shell"}
+        self.docket.source_tool = lambda session_id, source: tools.get((source or {}).get("id"))
+        cases = [
+            # (request, auto-approved?, reason)
+            ({"action": "edit", "resources": ["src/a.py"]}, True, "inside project, write"),
+            ({"action": "read", "resources": [str(project / "README.md")]}, True, "inside project, read"),
+            ({"action": "edit", "resources": [str(project / "src/../../proj/b.py")]}, True, "inside project, write"),
+            ({"action": "external_directory", "resources": ["/etc/*"], "source": {"type": "tool", "id": "t_read"}}, True, "outside project, read only"),
+            ({"action": "external_directory", "resources": ["/tmp/*"], "source": {"type": "tool", "id": "t_write"}}, False, "outside project, write"),
+            ({"action": "edit", "resources": [str(project / "../escape.txt")]}, False, "outside project, write"),
+            ({"action": "external_directory", "resources": ["/tmp/x/*"], "metadata": {"filepath": "/tmp/x/a", "parentDir": "/tmp/x"}}, False, "outside project, write"),
+            ({"action": "shell", "resources": ["rm -rf build"]}, False, "destructive"),
+            ({"action": "edit", "resources": [str(project / "trash/a")]}, False, "destructive"),
+            ({"action": "external_directory", "resources": ["/opt/*"], "source": {"type": "tool", "id": "t_shell"}}, False, "outside project, direction unknown"),
+            ({"action": "external_directory", "resources": ["/opt/*"]}, False, "outside project, direction unknown"),
+            ({"action": "external_directory", "resources": []}, False, "no resources"),
+            ({"action": "shell", "resources": ["pytest -q"]}, True, "project shell"),
+        ]
+        for i, (request, auto, reason) in enumerate(cases):
+            with self.subTest(request=request):
+                self.db.execute("update cards set resolved_at = 1 where delegation_id = 'ses_p' and resolved_at is null")
+                self.docket.permission_card("ses_p", {"id": f"per_{i}", **request})
+                event = self.db.execute("select kind, detail from events where delegation_id = 'ses_p' and kind like 'permission:%' order by id desc limit 1").fetchone()
+                self.assertEqual(event[0], "permission:auto" if auto else "permission:ask")
+                self.assertEqual(json.loads(event[1])["reason"], reason)
+                self.assertEqual(f"per_{i}" in answered, auto)
+                card = ledger.open_card(self.db, "ses_p")
+                self.assertEqual(card is not None and json.loads(card["body"])["pending_permission"] == f"per_{i}", not auto)
+        # A handoff with no directory of its own vouches for nothing outside reads.
+        self.docket.source_tool = lambda session_id, source: "write"
+        self.docket.permission_card("ses_x", {"id": "per_w", "action": "external_directory", "resources": ["/tmp/*"], "source": {"type": "tool"}})
+        self.assertNotIn("per_w", answered)
 
     def test_cards_wait_their_turn_and_none_is_overwritten(self):
         self.docket.show_card("ses_x", "question", dict(CARD, progress="first"))
@@ -128,7 +169,7 @@ class Flows(unittest.TestCase):
         self.docket.advance("ses_x")
         permission = ledger.open_card(self.db, "ses_x")
         progress = json.loads(permission["body"])["progress"]
-        self.assertIn("read files outside the project", progress)  # one plain sentence
+        self.assertIn("files there may change", progress)  # one plain sentence; no tool behind it, so not called a read
         self.assertNotIn("/tmp/a", progress)  # no raw paths
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append(decision)
