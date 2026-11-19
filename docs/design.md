@@ -1,5 +1,7 @@
 # Design
 
+OpenClaw Desk sits between three rhythms. The chat is synchronous: you and your agent take turns, and a question you have not answered holds up the thread. The coding agent is parallel: each handoff moves forward in the background, in its own session. The Desk is the rhythm that can be late: a brief of one sentence and at most two questions, each with a recommended option, waits on the panel until you have a minute. Everything that needs you, but not now, lands there. The sections below explain why this layer is needed and where its boundaries lie.
+
 ## The gap
 
 A personal agent like OpenClaw lives in one chat. That is the point: your attention is limited, so daily life and work run through one thread, and the agent does most of the talking. It expands on what you say and fills in what you left out.

@@ -1,32 +1,52 @@
 # OpenClaw Desk
 
-**Hand coding work off from your OpenClaw chat. Decide on a quiet panel. Skip the transcripts.**
+*A panel between your OpenClaw chat and the coding agent, for the decisions that can wait.*
 
-When your OpenClaw agent hands a task to a coding agent (OpenCode, Claude Code or Codex), the follow-up moves out of your chat and onto a native macOS panel. A project-manager agent follows the task, checks what was delivered, and brings you a one-sentence brief with at most two decisions, each with a recommended answer. You click, it relays, the work goes on.
+A chat is synchronous: one question you have not answered holds up the whole conversation. A coding agent (OpenCode, Claude Code or Codex) is parallel: handed-off tasks move forward in the background, each on its own. Between the two there is no layer where a judgment can pause, pile up and arrive late. OpenClaw Desk is that layer, a native macOS panel. Everything that needs you, but not now, lands there.
 
 <p align="center"><img src="docs/panel-en.png" width="380" alt="The Desk panel: a brief with two decisions and recommended options"></p>
 
-## What you get
+## Three rhythms
 
-- **Your chat stays a chat.** Handing off gets one line back: "Handed off: Add rate limiting to the public API." No progress reports, no technical questions, nothing waiting for an answer in the middle of your day.
-- **A PM for every handoff.** When the coding agent finishes a run, a dedicated agent reads the result, checks the delivery itself (opens the files, runs the unit tests), and decides the technical details on its own. Only what truly needs you reaches the panel.
-- **Briefs you can answer in a second.** One sentence on where things stand. At most two questions, each with a recommended option. Everything the PM decided for you is listed, folded away, one click from view.
-- **Three rounds, then it's yours.** Back-and-forth through the Desk is capped at three relayed decisions. After that, or whenever you like, one button opens the session in OpenCode, or in Terminal for Claude Code and Codex, and you take it from there.
-- **It works from your words, not a paraphrase.** A judge model picks the messages from your chat that belong to the task and hands them to the PM verbatim. On 17 real handoffs it kept 97% of the relevant messages and all of the ones that stated requirements.
-- **Calm by design.** The panel rests as a small pill on the screen edge (⌥⌘D to open). No notifications, no sounds. A brief can wait until you have a minute.
-- **English and Chinese.** It follows the system language, including the briefs the PM writes.
+Each kind of work keeps its own pace: the chat answers at once, the coding agent works in parallel, and the decisions wait on the Desk until you get to them.
 
-## Why not just…
+### The chat: synchronous
 
-**…keep following up in the chat?** A chat is synchronous: a question you have not answered blocks the conversation, and every report lands between everything else you are doing. Your agent's habit of expanding on things is exactly wrong for a task you handed off so you would not have to think about the details. The Desk is asynchronous and terse on purpose.
+You and your agent take turns, so the chat only stays a chat if handed-off work does not come back into it. Handing off gets one line back: "Handed off: Add rate limiting to the public API." No progress reports, no technical questions, nothing waiting for an answer in the middle of your day.
 
-**…open the session in OpenCode, or use an [inbox](https://github.com/PeberWang/opencode-openclaw-inbox)?** That means reading the coding agent's transcript and, in practice, steering technical details yourself. An inbox tells you a session exists; the Desk tells you what was decided and asks only what is left. The two fit together: start with the inbox if all you want is to see dispatched sessions and jump into them; the Desk is the same idea carried further, with a PM per handoff. They share the dispatch convention, and the Desk can be the only entry point.
+What you said still reaches the work in your own words, not a paraphrase. A judge model picks the messages from your chat that belong to the task and hands them to the PM verbatim. On 17 real handoffs it kept 97% of the relevant messages and all of the ones that stated requirements.
 
-**…let the agent run and check the result later?** You would get a long technical summary written by the agent that did the work. The Desk's PM is a second agent that verifies the delivery and turns it into a decision. Its output is checked in code: lengths, number of questions, exactly one recommended option.
+### The coding agent: parallel
 
-**…tell the coding agent to write shorter summaries?** Shorter is not the problem; deciding what needs you is. The PM keeps a running record of what you said, what was decided and how many rounds are left, makes the technical calls itself, and lists them where you can check them.
+Each handoff runs in the background in its own coding-agent session, and each one has its own project-manager agent. When the coding agent finishes a run, the PM reads the result, checks the delivery itself (opens the files, runs the unit tests) and decides the technical details on its own. Only what truly needs you reaches the panel.
 
-## How it works
+Back-and-forth through the Desk is capped at three relayed decisions. After that, or whenever you like, one button opens the session in OpenCode, or in Terminal for Claude Code and Codex, and you take it from there.
+
+### The Desk: it can be late
+
+A brief arrives when the work reaches a decision and waits until you have a minute. The panel rests as a small pill on the screen edge (⌥⌘D to open), with no notifications and no sounds.
+
+A brief is answered in a second: one sentence on where things stand, at most two questions, each with a recommended option. Everything the PM decided for you is listed, folded away, one click from view. You click or write one line, the PM relays it, and the work goes on. The panel follows the system language, English or Chinese, and so do the briefs the PM writes.
+
+## Simpler alternatives
+
+### Just keep following up in the chat
+
+A chat is synchronous: a question you have not answered blocks the conversation, and every report lands between everything else you are doing. Your agent's habit of expanding on things is exactly wrong for a task you handed off so you would not have to think about the details. The Desk is asynchronous and terse on purpose.
+
+### Just open the session in OpenCode, or use an [inbox](https://github.com/PeberWang/opencode-openclaw-inbox)
+
+That means reading the coding agent's transcript and, in practice, steering technical details yourself. An inbox tells you a session exists; the Desk tells you what was decided and asks only what is left. The two fit together: start with the inbox if all you want is to see dispatched sessions and jump into them; the Desk is the same idea carried further, with a PM per handoff. They share the dispatch convention, and the Desk can be the only entry point.
+
+### Just let the agent run and check the result later
+
+You would get a long technical summary written by the agent that did the work. The Desk's PM is a second agent that verifies the delivery and turns it into a decision. Its output is checked in code: lengths, number of questions, exactly one recommended option.
+
+### Just tell the coding agent to write shorter summaries
+
+Shorter is not the problem; deciding what needs you is. The PM keeps a running record of what you said, what was decided and how many rounds are left, makes the technical calls itself, and lists them where you can check them.
+
+## Architecture
 
 ```
 your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenCode · Claude Code · Codex
@@ -49,7 +69,7 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
 
 The full rationale is in [docs/design.md](docs/design.md).
 
-## Install
+## Installation
 
 Requirements: macOS 14 or later, Command Line Tools (`xcode-select --install`), [OpenClaw](https://openclaw.ai), and at least one coding agent: [OpenCode](https://opencode.ai) Desktop with the [inbox plugin](https://github.com/PeberWang/opencode-openclaw-inbox) v0.4.0 or later, or the [Claude Code](https://code.claude.com) / [Codex](https://developers.openai.com/codex) CLI, logged in.
 
@@ -67,7 +87,7 @@ The script builds the app into `~/Applications`, starts the service and the app 
 
 To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too).
 
-## Use
+## Daily use
 
 - Ask OpenClaw to hand something off, as you normally would. It answers with one line.
 - When a brief is ready, the pill on the right edge shows a count. Click it or press ⌥⌘D.
@@ -76,7 +96,7 @@ To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too)
 - A permission request is an ordinary card that happens to block the work. It says in one sentence what the coding agent wants to do outside the project and what the risk is, for example "It wants to delete some temporary files outside the project; deleted files cannot be recovered." If the run ends first, the request expires by itself.
 - `desk-dispatch --engine claude` or `--engine codex` picks another coding agent for one task; `"engine"` in the config changes the default.
 
-## Configure
+## Configuration
 
 `~/Library/Application Support/openclaw-desk/config.json` (restart the service after editing: `launchctl kickstart -k gui/$(id -u)/io.github.peberwang.openclaw-desk`):
 
@@ -111,9 +131,25 @@ Development notes: offline tests with `python3 -I -m unittest discover -s tests 
 
 ## 中文说明
 
-OpenClaw 的聊天主线里交办出去的编程任务，挪到桌面上的原生面板「案头」里推进：每件交办有一个项目经理 agent 跟进，OpenCode（或 Claude Code、Codex）每做完一轮，它自己核实交付，写成一句话进展加最多两个待你定的问题，每个问题给出推荐选项。你点一下或回一句，它转给编程代理续做。聊天里只留一句「已交办」，不再被进度和技术细节打断；往返满 3 轮，或者你想自己动手时，一键在 OpenCode 或终端接管。判断器（TypeSafe Jev）会从聊天里挑出你关于这件事的原话交给项目经理，不靠转述。界面和请示件跟随系统语言，可在配置里设 `"locale": "zh"`。安装：`bash scripts/install.sh`。
+*夹在 OpenClaw 聊天和编程代理之间的一块面板，放那些可以晚一点再定的事。*
+
+聊天是同步的：一个没回答的问题会卡住整条对话。编程代理（OpenCode、Claude Code 或 Codex）是并行的：交办出去的任务在后台各自推进。两者之间缺一层可以停、可以攒、可以迟到的判断缓冲，「案头」就是这一层，一块 macOS 原生面板。所有「需要你，但不是现在」的事都落在这里。
 
 <p align="center"><img src="docs/panel-zh.png" width="380" alt="案头面板"></p>
+
+### 聊天：同步
+
+聊天里只留一句「已交办」，不追问、不汇报进度，不再被技术细节打断。判断器（TypeSafe Jev）会从聊天里挑出你关于这件事的原话交给项目经理，不靠转述。
+
+### 编程代理：并行
+
+每件交办在后台有自己的编程代理会话，也有自己的项目经理 agent。OpenCode（或 Claude Code、Codex）每做完一轮，项目经理自己核实交付，替你定技术细节，只把真正需要你的事送上面板。往返满 3 轮，或者你想自己动手时，一键在 OpenCode 或终端接管。
+
+### 案头：可以迟到
+
+请示件是一句话进展加最多两个待你定的问题，每个问题给出推荐选项，可以等到你有空再看。你点一下或回一句，项目经理转给编程代理续做。界面和请示件跟随系统语言，可在配置里设 `"locale": "zh"`。
+
+安装：`bash scripts/install.sh`。
 
 ## License
 
