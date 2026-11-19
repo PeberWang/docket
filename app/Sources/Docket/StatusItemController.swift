@@ -64,6 +64,9 @@ final class StatusItemController: NSObject {
         let panelItem = NSMenuItem(title: store.hidden ? s(.showPanel) : s(.hidePanel), action: #selector(toggleHiddenPanel), keyEquivalent: "")
         panelItem.target = self
         menu.addItem(panelItem)
+        let tiers = NSMenuItem(title: s(.permissionSettings), action: #selector(openPermissionSettings), keyEquivalent: "")
+        tiers.target = self
+        menu.addItem(tiers)
         let settings = NSMenuItem(title: s(.settings), action: #selector(openSettings), keyEquivalent: ",")
         settings.keyEquivalentModifierMask = [.command]
         settings.target = self
@@ -84,6 +87,10 @@ final class StatusItemController: NSObject {
 
     @objc private func toggleHiddenPanel() {
         store.toggleHidden()
+    }
+
+    @objc private func openPermissionSettings() {
+        PermissionSettingsLauncher.open(strings: store.s)
     }
 
     @objc private func openSettings() {

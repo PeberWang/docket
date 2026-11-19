@@ -62,6 +62,7 @@ enum StringKey: Sendable {
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
     // Menu bar
     case showDocket, hideDocket, hidePanel, showPanel, panelHidden, settings, quit
+    case permissionSettings, permissionSettingsMissing, permissionSettingsFailed, ok
     // Settings
     case settingsTitle, settingsInterface, settingsLanguage, languageSystem, settingsShowStrip
     // Permission popup
@@ -121,6 +122,10 @@ struct Strings: Sendable {
         .panelHidden: ("Panel hidden", "面板已隐藏"),
         .settings: ("Settings…", "设置…"),
         .quit: ("Quit", "退出"),
+        .permissionSettings: ("Permission Tiers…", "权限分级设置…"),
+        .permissionSettingsMissing: ("permission-settings not found. Paths tried:", "未找到 permission-settings，路径是："),
+        .permissionSettingsFailed: ("Couldn’t open permission-settings", "无法启动 permission-settings"),
+        .ok: ("OK", "好"),
 
         .settingsTitle: ("Settings", "设置"),
         .settingsInterface: ("Interface", "界面"),
