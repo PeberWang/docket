@@ -229,7 +229,11 @@ final class Store: ObservableObject {
         guard canSend(delegation), let card = delegation.card else { return }
         let choices = selections[card.id] ?? [:]
         let reply = trimmedDraft(for: delegation.id)
-        perform(delegation.id) { client in
+        perform(delegation.id, settled: { store in
+            // Answered or ended elsewhere (in OpenCode, another window): nothing went wrong.
+            let now = store.delegations.first { $0.id == delegation.id }
+            return now == nil || now?.card?.id != card.id || now?.card?.open != true
+        }) { client in
             try await client.decide(cardID: card.id, choices: choices, reply: reply)
         } onSuccess: { store in
             store.sentAnswers[card.id] = SentAnswer(choices: choices, reply: reply)
@@ -240,7 +244,10 @@ final class Store: ObservableObject {
 
     func close(_ delegation: Delegation) {
         let reply = trimmedDraft(for: delegation.id)
-        perform(delegation.id) { client in
+        perform(delegation.id, settled: { store in
+            let phase = store.delegations.first { $0.id == delegation.id }?.phase
+            return phase == nil || phase == .closed || phase == .takenOver
+        }) { client in
             try await client.close(delegationID: delegation.id, reply: reply)
         } onSuccess: { store in
             store.drafts[delegation.id] = nil
@@ -255,6 +262,7 @@ final class Store: ObservableObject {
 
     private func perform(
         _ id: String,
+        settled: (@MainActor (Store) -> Bool)? = nil,
         _ request: @escaping @MainActor (DaemonClient) async throws -> Void,
         onSuccess: @escaping @MainActor (Store) -> Void
     ) {
@@ -266,12 +274,23 @@ final class Store: ObservableObject {
                 try await request(client)
                 onSuccess(self)
                 await refresh()
-            } catch let error as DeskError {
-                errors[id] = error
             } catch {
-                errors[id] = .server(error.localizedDescription)
+                // The daemon refuses a card handled elsewhere; refresh and, if that is what happened,
+                // let the card show its settled state instead of an error.
+                await refresh()
+                if let settled, settled(self), connection == .connected {
+                    onSettled(id)
+                } else {
+                    errors[id] = (error as? DeskError) ?? .server(error.localizedDescription)
+                }
             }
             busy.remove(id)
         }
+    }
+
+    private func onSettled(_ id: String) {
+        drafts[id] = nil
+        let open = Set(delegations.compactMap { $0.card?.open == true ? $0.card?.id : nil })
+        selections = selections.filter { open.contains($0.key) }
     }
 }
