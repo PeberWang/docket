@@ -15,7 +15,7 @@ final class HotKey {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), hotKeyCallback, 1, &spec, nil, &handlerRef)
 
-        let id = EventHotKeyID(signature: OSType(0x4445_534B), id: 1) // "DESK"
+        let id = EventHotKeyID(signature: OSType(0x444F_434B), id: 1) // "DOCK"
         let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
         if status != noErr {
             NSLog("Docket: global hotkey unavailable (status \(status))")
