@@ -40,14 +40,14 @@ def _language() -> str:
 
 
 def rules() -> str:
-    return f"""You are the user's project manager (PM) on the Desk for exactly one handoff. The Desk is a native panel on the user's Mac: work handed to OpenCode moves forward there as short briefs the user decides on, instead of in the chat.
+    return f"""You are the user's project manager (PM) on Docket for exactly one handoff. Docket is a native panel on the user's Mac: work handed to OpenCode moves forward there as short briefs the user decides on, instead of in the chat.
 
 Rules:
-1. Do not send chat messages of any kind and do not call message or send tools. Your final reply is read only by the Desk program.
+1. Do not send chat messages of any kind and do not call message or send tools. Your final reply is read only by the Docket program.
 2. Decide technical details yourself and list them in decided_for_you. Put only what truly needs the user's call in decisions (at most 2, empty if none). Each decision has 2–4 short options and exactly one with recommended=true.
 3. progress is one sentence with the state and the outcome, not the process.
 4. To verify a delivery you may read files and run unit tests. Do not change project code, commit, push, release, run anything that sends or deploys (email, chat, push notifications, scheduled jobs, servers), or edit cron.
-5. A handoff gets at most 3 rounds of the user's decisions relayed to OpenCode. When they are used up, the Desk suggests the user take it over in OpenCode.
+5. A handoff gets at most 3 rounds of the user's decisions relayed to OpenCode. When they are used up, Docket suggests the user take it over in OpenCode.
 6. Write every user-facing string in {_language()}, in plain words. Someone who has not read the code or the project's docs must understand each question; name things by what they are, not by internal terms (a "gate table" is a file's name, not an explanation), and keep file names out of decisions unless the user must pick one.
 7. Use no Markdown in card text: no asterisks for emphasis, no backticks, no headings. The panel shows plain text, so Markdown would appear literally.
 8. Write every user-facing string in {_language()}.
@@ -120,7 +120,7 @@ def decision_wake(card: dict, choices: dict, reply: str, rounds: int) -> str:
         option = next((o for o in decision["options"] if o["id"] == choices.get(decision["id"])), None)
         if option:
             picked.append(f"- {decision['question']} → {option['label']}")
-    lines = ["The user answered your last brief on the Desk."]
+    lines = ["The user answered your last brief on Docket."]
     if picked:
         lines += ["Choices:"] + picked
     if reply.strip():
@@ -149,7 +149,7 @@ def mention_wake(text: str, rounds: int) -> str:
 
 def close_wake(reply: str) -> str:
     extra = f"They added: {reply.strip()}\n" if reply.strip() else ""
-    return f'The user closed this handoff on the Desk. {extra}Give a one-sentence conclusion in {_language()}.\n\nReply only with: {{"action": "close", "conclusion": "…"}}'
+    return f'The user closed this handoff on Docket. {extra}Give a one-sentence conclusion in {_language()}.\n\nReply only with: {{"action": "close", "conclusion": "…"}}'
 
 
 # ---------- running and validating ----------

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake Desk daemon for building and checking Desk.app without the real one.
+"""Fake Docket service for building and checking Docket.app without the real one.
 
 Serves the API in SPEC.md from memory and writes the real discovery file
 ~/Library/Application Support/openclaw-desk/daemon.json by default. Refuses to start
@@ -11,7 +11,7 @@ if that file points at a daemon that is still reachable. Python 3.9, standard li
     python3 app/dev-daemon.py --locale zh     # "locale" field and sample copy in Chinese
     python3 app/dev-daemon.py --discovery app/build/dev-daemon.json
         # side by side with a real daemon; point a debug build at it with
-        # Desk.app/Contents/MacOS/Desk -debugDiscoveryFile <absolute path>
+        # Docket.app/Contents/MacOS/Desk -debugDiscoveryFile <absolute path>
 
 After a decide, the delegation goes pending (3 s) -> running (10 s) -> a new card,
 so the polling path can be watched end to end.
@@ -520,7 +520,7 @@ def remove_discovery(token):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fake Desk daemon for Desk.app development")
+    parser = argparse.ArgumentParser(description="Fake Docket service for Docket.app development")
     parser.add_argument("--port", type=int, default=0, help="port to bind (default: any free port)")
     parser.add_argument("--all", action="store_true", help="also serve limit / taken_over / closed samples")
     parser.add_argument("--permission", action="store_true", help="also serve a permission-request sample (as the real daemon would)")

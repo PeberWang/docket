@@ -1,6 +1,6 @@
 #!/bin/bash
-# Install OpenClaw Desk for the current user:
-#   - builds Desk.app and copies it to ~/Applications
+# Install OpenClaw Docket for the current user:
+#   - builds Docket.app and copies it to ~/Applications
 #   - writes a default config if there is none
 #   - registers two launchd agents: the service (always on) and the app (at login)
 #   - installs the desk-dispatch skill into OpenClaw, if OpenClaw is present
@@ -23,8 +23,8 @@ command -v openclaw >/dev/null || echo "warning: openclaw is not on PATH; the PM
 say "Building the app"
 bash "$REPO/app/build.sh" >/dev/null
 mkdir -p "$HOME/Applications" "$DATA" "$LOGS" "$AGENTS"
-rm -rf "$HOME/Applications/Desk.app"
-cp -R "$REPO/app/build/Desk.app" "$HOME/Applications/Desk.app"
+rm -rf "$HOME/Applications/Docket.app"
+cp -R "$REPO/app/build/Docket.app" "$HOME/Applications/Docket.app"
 
 if [ ! -f "$DATA/config.json" ]; then
   printf '{\n  "watch": ["*"],\n  "locale": "auto",\n  "engine": "opencode"\n}\n' > "$DATA/config.json"
@@ -76,7 +76,7 @@ cat > "$AGENTS/$LABEL.app.plist" <<EOF
 <dict>
   <key>Label</key><string>$LABEL.app</string>
   <key>ProgramArguments</key>
-  <array><string>$(xml "$HOME/Applications/Desk.app/Contents/MacOS/Desk")</string></array>
+  <array><string>$(xml "$HOME/Applications/Docket.app/Contents/MacOS/Desk")</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Interactive</string>
@@ -99,16 +99,16 @@ fi
 
 cat <<EOF
 
-OpenClaw Desk is running: the tray icon is in the menu bar, the pill on the right edge (⌥⌘D).
+OpenClaw Docket is running: the tray icon is in the menu bar, the pill on the right edge (⌥⌘D).
 
 Next:
-  1. Tell OpenClaw to hand off through the desk. Add to ~/.openclaw/workspace/AGENTS.md:
-       Hand coding work off with the desk-dispatch skill, reply with one line, and leave the rest to the Desk.
+  1. Tell OpenClaw to hand off through Docket. Add to ~/.openclaw/workspace/AGENTS.md:
+       Hand coding work off with the desk-dispatch skill, reply with one line, and leave the rest to Docket.
   2. Optional, the judge: put a TypeSafe key (https://console.typesafe.ai) in TYPESAFE_API_KEY
      or at "typesafe": {"api_key": "..."} in ~/.openclaw/workspace/secrets.json, then
        launchctl kickstart -k $DOMAIN/$LABEL
   3. For OpenCode: install the opencode-openclaw-inbox plugin (0.4.0 or later), which provides
-     opencode-dispatch and opens sessions for the Desk.
+     opencode-dispatch and opens sessions for Docket.
 
 Settings: $DATA/config.json    Logs: $LOGS/daemon.log
 EOF

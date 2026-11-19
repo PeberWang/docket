@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Hand a coding task to an agent and let OpenClaw Desk follow it.
+"""Hand a coding task to an agent and let OpenClaw Docket follow it.
 
     desk-dispatch [--engine opencode|claude|codex] --title "<task name>" [-f BRIEF] [--model M] [--auto] "<instruction>"
 
   opencode (default)  runs `opencode-dispatch --detach`: archived, inbox prefix, returns at once
-  claude, codex       the Desk service starts the CLI agent in the current directory and follows it
+  claude, codex       the Docket service starts the CLI agent in the current directory and follows it
 
-Returns as soon as the task is started. The caller gets no completion notice: the Desk
+Returns as soon as the task is started. The caller gets no completion notice: Docket
 verifies the delivery, writes briefs and sends follow-ups. Follow-ups never go through
 this script.
 
@@ -49,7 +49,7 @@ def parse(argv):
         elif arg == "--auto":
             options["auto"] = True
         elif arg in ("-s", "--session", "-c", "--continue"):
-            fail("follow-ups go through the Desk, not this script")
+            fail("follow-ups go through Docket, not this script")
         elif arg in ("-h", "--help"):
             print(__doc__.strip())
             sys.exit(0)
@@ -110,7 +110,7 @@ def cli(options, engine):
     try:
         service = json.loads((HOME / "daemon.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        fail("the Desk service is not running (no daemon.json)", 1)
+        fail("the Docket service is not running (no daemon.json)", 1)
     request = urllib.request.Request(
         service["url"] + "/api/dispatch",
         data=json.dumps(body).encode("utf-8"),
@@ -121,10 +121,10 @@ def cli(options, engine):
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        fail(f"the Desk refused: {error.read().decode('utf-8', 'replace')[:300]}", 1)
+        fail(f"Docket refused: {error.read().decode('utf-8', 'replace')[:300]}", 1)
     except urllib.error.URLError as error:
-        fail(f"the Desk service is not reachable: {error.reason}", 1)
-    print(f"dispatched in background: {options['title']} (handoff {result['id']}, {ENGINES[engine]}). Follow-ups happen on the Desk.")
+        fail(f"the Docket service is not reachable: {error.reason}", 1)
+    print(f"dispatched in background: {options['title']} (handoff {result['id']}, {ENGINES[engine]}). Follow-ups happen on Docket.")
 
 
 def main():

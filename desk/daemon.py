@@ -7,7 +7,7 @@ Threads:
   runs       CLI engine processes (Claude Code, Codex) -> wake the PM when one exits
   mentions   polls watched OpenClaw transcripts for new user messages -> judge attribution
   workers    PM calls (seconds to minutes each), one at a time per delegation
-  http       127.0.0.1 API for Desk.app (see app/SPEC.md)
+  http       127.0.0.1 API for Docket.app (see app/SPEC.md)
 """
 
 from __future__ import annotations
@@ -619,7 +619,7 @@ class Desk:
         return any(marker in lowered for marker in ("rm -rf", "rm ", "sudo ", "chmod -r", "mv ", "trash", "/etc/", "/usr/", "/system/"))
 
     def permission_card(self, session_id: str, request: dict):
-        """A run that still asks for permission must not wait silently: ask on the Desk."""
+        """A run that still asks for permission must not wait silently: ask on Docket."""
         row = self.delegation(session_id)
         if not row or row["state"] in ("closed", "taken_over") or not request.get("id"):
             return
@@ -699,7 +699,7 @@ class Desk:
                 self.on_run_end(row["id"], session["outcome"])
 
 
-# ---------- HTTP API for Desk.app ----------
+# ---------- HTTP API for Docket.app ----------
 
 def serve(desk: Desk):
     token = secrets.token_hex(16)

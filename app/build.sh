@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build Desk.app (OpenClaw Desk; the bundle stays Desk.app because launchd points at that path): swift build -c release, assemble build/Desk.app, ad-hoc sign.
+# Build Docket.app (OpenClaw Docket; the executable inside stays Desk, the Swift target): swift build -c release, assemble build/Docket.app, ad-hoc sign.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
-APP="build/Desk.app"
+APP="build/Docket.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Desk" "$APP/Contents/MacOS/Desk"
@@ -31,9 +31,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>OpenClaw Desk</string>
+    <string>Docket</string>
     <key>CFBundleDisplayName</key>
-    <string>OpenClaw Desk</string>
+    <string>Docket</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

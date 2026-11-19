@@ -18,7 +18,7 @@ final class HotKey {
         let id = EventHotKeyID(signature: OSType(0x4445_534B), id: 1) // "DESK"
         let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
         if status != noErr {
-            NSLog("Desk: global hotkey unavailable (status \(status))")
+            NSLog("Docket: global hotkey unavailable (status \(status))")
         }
     }
 

@@ -1,7 +1,7 @@
 import AppKit
 
-/// OpenCode permission requests are answered in the `opencode-permission-notify` popup, never on the Desk.
-/// The Desk only checks whether that popup is installed, so it can say so once when it is not.
+/// OpenCode permission requests are answered in the `opencode-permission-notify` popup, never on Docket.
+/// Docket only checks whether that popup is installed, so it can say so once when it is not.
 enum PermissionPopup {
     static let package = "opencode-permission-notify"
     static let snippet = "\"plugins\": [\"opencode-permission-notify\"]"

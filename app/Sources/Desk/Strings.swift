@@ -77,14 +77,14 @@ struct Strings: Sendable {
     let lang: Lang
 
     private static let table: [StringKey: (en: String, zh: String)] = [
-        .panelTitle: ("Desk", "案头"),
+        .panelTitle: ("Docket", "案头"),
         .needYouOne: ("%d waiting on you", "%d 件待你定"),
         .needYouMany: ("%d waiting on you", "%d 件待你定"),
         .noHandoffs: ("Nothing handed off", "暂无交办"),
-        .serviceNotRunning: ("Desk service isn’t running", "案头后台未运行"),
-        .showDeskHelp: ("Show Desk (⌥⌘D)", "展开案头（⌥⌘D）"),
+        .serviceNotRunning: ("Docket service isn’t running", "案头后台未运行"),
+        .showDeskHelp: ("Show Docket (⌥⌘D)", "展开案头（⌥⌘D）"),
         .hideDeskHelp: ("Hide (Esc or ⌥⌘D)", "收起（Esc / ⌥⌘D）"),
-        .statusTooltip: ("OpenClaw Desk (⌥⌘D)", "案头（⌥⌘D）"),
+        .statusTooltip: ("OpenClaw Docket (⌥⌘D)", "案头（⌥⌘D）"),
 
         .phaseAwaiting: ("Waiting on you", "待你定"),
         .phaseReadyToClose: ("Ready to close", "待结案"),
@@ -138,7 +138,7 @@ struct Strings: Sendable {
         .settingsPermissions: ("Permissions", "授权"),
         .popupInstalled: ("Permission popup installed", "授权弹窗已安装"),
         .popupMissing: ("Permission popup not installed", "授权弹窗未安装"),
-        .popupAbout: ("OpenCode’s permission requests are answered in the popup at the top right, not on the Desk.",
+        .popupAbout: ("OpenCode’s permission requests are answered in the popup at the top right, not on Docket.",
                       "OpenCode 的授权请求在右上角弹窗里回答，不进案头。"),
 
         .unreadableResponse: ("Couldn’t read the service’s response", "后台返回的数据无法解析"),
