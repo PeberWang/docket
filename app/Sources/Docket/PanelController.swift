@@ -37,13 +37,12 @@ final class PanelController {
             backing: .buffered,
             defer: false
         )
-        // Collapsed, the strip is an ordinary window in one space: other apps' windows cover it,
-        // and it does not follow into full-screen spaces. apply() makes it a floating,
-        // all-spaces window only while it is expanded. (.canJoinAllSpaces alone is enough to
-        // keep a normal-level window on top of a full-screen app, so it is off when collapsed.)
-        panel.isFloatingPanel = false
-        panel.level = .normal
-        panel.collectionBehavior = [.ignoresCycle]
+        // A desk is always in view: unless hidden, collapsed and expanded alike float above
+        // ordinary windows on every space, full-screen apps included. Hiding (orderOut) is the
+        // only way to make room. The level is a window property, set once here, never re-asserted.
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         // Only take key status when a control needs it (the reply field), so we never steal focus.
         panel.becomesKeyOnlyIfNeeded = true
@@ -112,13 +111,6 @@ final class PanelController {
             effect.maskImage = Self.mask(radius: expanded ? PanelMetrics.expandedRadius : PanelMetrics.pillRadius)
             panel.setFrame(Self.frame(expanded: expanded), display: true)
             panel.invalidateShadow()
-            // Expanded is the summoned state: float above ordinary windows on every space,
-            // full-screen apps included, so the hotkey works from anywhere. Collapsed drops back
-            // to an ordinary, coverable window in a single space.
-            panel.level = expanded ? .floating : .normal
-            panel.collectionBehavior = expanded
-                ? [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-                : [.ignoresCycle]
         }
         if !panel.isVisible {
             panel.orderFrontRegardless()

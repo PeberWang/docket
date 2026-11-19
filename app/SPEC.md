@@ -72,8 +72,10 @@ plus the count (`2`) when cards await. Click toggles the panel. Right-click: Sho
 Collapse Panel (展开面板 / 收起面板), Quit (退出).
 
 **Panel** (`NSPanel`, `.nonactivatingPanel`, borderless, rounded, vibrancy material,
-`collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`, does not steal focus
-except when the user clicks into the reply field):
+`level = .floating`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`
+in both states, so unless hidden no window — full-screen apps included — covers it; Hide
+is the only way to make room. Does not steal focus except when the user clicks into the
+reply field):
 
 - **Collapsed (default at launch):** a slim pill docked to the right edge of the main
   screen, vertically centered, about 34×120 pt, showing the same tray symbol and the
