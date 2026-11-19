@@ -26,7 +26,7 @@ enum PermissionPopup {
             guard let text = try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8) else { continue }
             let listed = text.split(whereSeparator: \.isNewline).contains { line in
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                return !trimmed.hasPrefix("//") && trimmed.contains("\"\(package)")
+                return !trimmed.hasPrefix("//") && trimmed.contains("permission-notify")
             }
             if listed { return true }
         }
