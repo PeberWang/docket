@@ -31,9 +31,23 @@ final class Store: ObservableObject {
     @Published private(set) var delegations: [Delegation] = []
     @Published private(set) var awaiting = 0
     @Published private(set) var connection: Connection = .unknown
-    @Published private(set) var lang: Lang = .system
+    @Published private(set) var lang: Lang = LanguagePreference.saved.resolve(daemon: nil)
+    @Published var languagePreference = LanguagePreference.saved {
+        didSet {
+            guard oldValue != languagePreference else { return }
+            languagePreference.save()
+            applyLang()
+            notify()
+        }
+    }
+    /// The daemon's last `locale`, nil while it is down or silent.
+    private var daemonLang: Lang?
 
     var s: Strings { Strings(lang: lang) }
+
+    private func applyLang() {
+        lang = languagePreference.resolve(daemon: daemonLang)
+    }
 
     /// cardID → decisionID → optionID
     @Published private(set) var selections: [Int: [String: String]] = [:]
@@ -107,14 +121,16 @@ final class Store: ObservableObject {
             awaiting = shown.filter { $0.phase == .awaiting }.count
             connection = .connected
             notePermissionRequests(permissions)
-            lang = Lang(daemonValue: state.locale) ?? .system
+            daemonLang = Lang(daemonValue: state.locale)
+            applyLang()
             pruneSelections()
         } catch {
             guard seq == refreshSeq else { return }
             delegations = []
             awaiting = 0
             connection = .down
-            lang = .system
+            daemonLang = nil
+            applyLang()
         }
         notify()
     }

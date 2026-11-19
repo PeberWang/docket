@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController?
     private var statusItem: StatusItemController?
     private var hotKey: HotKey?
+    private var debugSettings: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always start collapsed. The debug default exists only for screenshots during development.
@@ -20,5 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel?.show()
         store.start()
+        // Debug only: open the settings window without going through the status-item menu.
+        if UserDefaults.standard.bool(forKey: "debugOpenSettings") {
+            let controller = SettingsWindowController(store: store)
+            debugSettings = controller
+            controller.show()
+        }
     }
 }

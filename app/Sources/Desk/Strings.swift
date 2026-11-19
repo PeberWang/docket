@@ -1,5 +1,29 @@
 import Foundation
 
+/// What the user picked in Settings, stored under `uiLanguage`.
+/// A pick of zh or en beats the daemon; `system` leaves the choice to `Lang`.
+enum LanguagePreference: String, CaseIterable, Sendable {
+    case system, zh, en
+
+    static let defaultsKey = "uiLanguage"
+
+    static var saved: LanguagePreference {
+        UserDefaults.standard.string(forKey: defaultsKey).flatMap(LanguagePreference.init(rawValue:)) ?? .system
+    }
+
+    func save() {
+        UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey)
+    }
+
+    func resolve(daemon: Lang?) -> Lang {
+        switch self {
+        case .zh: .zh
+        case .en: .en
+        case .system: daemon ?? .system
+        }
+    }
+}
+
 /// Interface language. The daemon's `locale` wins; until it answers, follow the system.
 enum Lang: String, Sendable {
     case en, zh
@@ -37,9 +61,12 @@ enum StringKey: Sendable {
     case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
     // Menu bar
-    case showDesk, hideDesk, hidePanel, showPanel, panelHidden, quit
+    case showDesk, hideDesk, hidePanel, showPanel, panelHidden, settings, quit
+    // Settings
+    case settingsTitle, settingsInterface, settingsLanguage, languageSystem, settingsShowStrip
     // Permission popup
     case popupNotice, popupHowTo, copySnippet, copied, dismiss
+    case settingsPermissions, popupInstalled, popupMissing, popupAbout
     // Errors
     case unreadableResponse, serviceReturned
 }
@@ -92,7 +119,14 @@ struct Strings: Sendable {
         .hidePanel: ("Hide Sidebar", "隐藏右侧条带"),
         .showPanel: ("Restore Sidebar", "恢复右侧条带"),
         .panelHidden: ("Panel hidden", "面板已隐藏"),
+        .settings: ("Settings…", "设置…"),
         .quit: ("Quit", "退出"),
+
+        .settingsTitle: ("Settings", "设置"),
+        .settingsInterface: ("Interface", "界面"),
+        .settingsLanguage: ("Language", "语言"),
+        .languageSystem: ("Follow System", "跟随系统"),
+        .settingsShowStrip: ("Show the right-side strip", "显示右侧条带"),
 
         .popupNotice: ("OpenCode is asking for a permission, and the popup that answers it isn’t installed.",
                        "OpenCode 有授权要处理，但授权弹窗组件没装。"),
@@ -101,6 +135,11 @@ struct Strings: Sendable {
         .copySnippet: ("Copy config", "复制配置"),
         .copied: ("Copied", "已复制"),
         .dismiss: ("Dismiss", "关闭"),
+        .settingsPermissions: ("Permissions", "授权"),
+        .popupInstalled: ("Permission popup installed", "授权弹窗已安装"),
+        .popupMissing: ("Permission popup not installed", "授权弹窗未安装"),
+        .popupAbout: ("OpenCode’s permission requests are answered in the popup at the top right, not on the Desk.",
+                      "OpenCode 的授权请求在右上角弹窗里回答，不进案头。"),
 
         .unreadableResponse: ("Couldn’t read the service’s response", "后台返回的数据无法解析"),
         .serviceReturned: ("The service returned %d", "后台返回 %d"),

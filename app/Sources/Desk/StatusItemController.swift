@@ -5,9 +5,11 @@ final class StatusItemController: NSObject {
     private let store: Store
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var symbolName: String?
+    private let settingsWindow: SettingsWindowController
 
     init(store: Store) {
         self.store = store
+        settingsWindow = SettingsWindowController(store: store)
         super.init()
         if let button = item.button {
             button.target = self
@@ -62,6 +64,10 @@ final class StatusItemController: NSObject {
         let panelItem = NSMenuItem(title: store.hidden ? s(.showPanel) : s(.hidePanel), action: #selector(toggleHiddenPanel), keyEquivalent: "")
         panelItem.target = self
         menu.addItem(panelItem)
+        let settings = NSMenuItem(title: s(.settings), action: #selector(openSettings), keyEquivalent: ",")
+        settings.keyEquivalentModifierMask = [.command]
+        settings.target = self
+        menu.addItem(settings)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: s(.quit), action: #selector(quit), keyEquivalent: "")
         quit.target = self
@@ -78,6 +84,10 @@ final class StatusItemController: NSObject {
 
     @objc private func toggleHiddenPanel() {
         store.toggleHidden()
+    }
+
+    @objc private func openSettings() {
+        settingsWindow.show()
     }
 
     @objc private func quit() {
