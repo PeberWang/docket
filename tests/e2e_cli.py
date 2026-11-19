@@ -3,7 +3,7 @@
 
     python3 -I tests/e2e_cli.py [claude|codex]
 
-Dispatches straight to a temporary Desk service (no chat involved), lets the agent write
+Dispatches straight to a temporary Docket service (no chat involved), lets the agent write
 one file in a scratch directory, answers the brief once (a follow-up run via resume), and
 closes. Everything it creates is deleted at the end.
 """
@@ -69,7 +69,7 @@ def main():
 
     model = "haiku" if ENGINE == "claude" else None
     started = api("POST", "/api/dispatch", {
-        "engine": ENGINE, "title": "Desk CLI self-check", "directory": str(WORK), "model": model,
+        "engine": ENGINE, "title": "Docket CLI self-check", "directory": str(WORK), "model": model,
         "instruction": "Create hello.txt in the current directory containing one line: hello desk. Then say in one sentence what you did.",
     })
     handoff = started["id"]

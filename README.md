@@ -1,6 +1,6 @@
 # OpenClaw Docket
 
-*Everything that needs your ruling, waiting in order.*
+*A panel between your OpenClaw chat and the coding agent, for the decisions that can wait.*
 
 A chat is synchronous: one question you have not answered holds up the whole conversation. A coding agent (OpenCode, Claude Code or Codex) is parallel: handed-off tasks move forward in the background, each on its own. Between the two there is no layer where a judgment can pause, pile up and arrive late. OpenClaw Docket is that layer, a native macOS panel. Everything that needs you, but not now, lands there.
 
