@@ -122,7 +122,9 @@ def add_delegation(conn, *, id, title, directory, source_key, dispatch_seq, disp
 
 
 def pm_key(delegation_id: str) -> str:
-    return f"agent:main:desk-{delegation_id.removeprefix('ses_').replace('_', '-')}"
+    # New handoffs get agent:main:docket-<id>. Handoffs registered before the rename keep the
+    # agent:main:desk-<id> stored in their row, so their PM sessions stay reachable.
+    return f"agent:main:docket-{delegation_id.removeprefix('ses_').replace('_', '-')}"
 
 
 def set_state(conn, delegation_id: str, state: str, **fields) -> None:

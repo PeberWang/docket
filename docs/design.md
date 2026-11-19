@@ -52,7 +52,7 @@ Docket is closer to an in-tray than to a chat. A brief states where things stand
 
 ## The PM
 
-Each handoff gets its own OpenClaw session (`agent:main:desk-<id>`). It is the same agent, with the same memory and tools, but a different session and different rules. It is not running all the time:
+Each handoff gets its own OpenClaw session (`agent:main:docket-<id>`). It is the same agent, with the same memory and tools, but a different session and different rules. It is not running all the time:
 
 - The service watches the coding agent: the OpenCode event stream, or the exit of a Claude Code or Codex process.
 - When a run ends, it wakes the PM once with `openclaw agent --session-key … --json` (no `--deliver`, so nothing reaches the chat).

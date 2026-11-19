@@ -30,7 +30,7 @@ Reply to the user with one line, for example "Handed off: <task name>. Follow-up
 
 - Don't call `opencode run`, `claude -p` or `codex exec` yourself for a handed-off task.
 - Don't send follow-ups with this script (`-s` is refused). Docket sends them after the user decides.
-- Inside a Docket PM session (`agent:main:desk-*`) never dispatch new work.
+- Inside a Docket PM session (`agent:main:docket-*`, or `agent:main:desk-*` for handoffs started before the rename) never dispatch new work.
 
 ## Requirements
 

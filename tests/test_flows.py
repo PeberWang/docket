@@ -64,6 +64,16 @@ class Flows(unittest.TestCase):
         self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {"relay": "no"}, "")
         self.assertEqual(self.sent, [])
 
+    def test_pm_sessions_new_prefix_and_old_rows_kept(self):
+        self.assertEqual(ledger.pm_key("ses_ab_c"), "agent:main:docket-ab-c")
+        self.db.execute("update delegations set pm_key = 'agent:main:desk-x' where id = 'ses_x'")
+        self.assertEqual(self.docket.delegation("ses_x")["pm_key"], "agent:main:desk-x")
+        from docket import config
+        settings = {"watch": ["*"]}
+        self.assertFalse(config.watched(settings, "agent:main:docket-x"))
+        self.assertFalse(config.watched(settings, "agent:main:desk-x"))
+        self.assertTrue(config.watched(settings, "agent:main:main"))
+
     def test_round_limit(self):
         for i in range(3):
             self.answers.append({"action": "relay", "message": f"r{i}"})

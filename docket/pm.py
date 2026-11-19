@@ -1,6 +1,6 @@
 """The PM: one OpenClaw session per handoff, woken only when something happened.
 
-The daemon calls `openclaw agent --session-key agent:main:desk-<id>` without
+The daemon calls `openclaw agent --session-key agent:main:docket-<id>` without
 `--deliver`, so nothing reaches the chat channel. The PM may use its tools (read the
 handoff doc, run the tests) but its final reply must be one JSON object; code validates
 it and asks once more with the errors if it is off.

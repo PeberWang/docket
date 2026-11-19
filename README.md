@@ -63,7 +63,7 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
                              Docket.app: menu bar + panel
 ```
 
-- Code keeps watch, the model only judges: the PM is not a loop. It is woken once per finished run with `openclaw agent --session-key agent:main:desk-<id>`, and nothing it writes goes to your chat.
+- Code keeps watch, the model only judges: the PM is not a loop. It is woken once per finished run with `openclaw agent --session-key agent:main:docket-<id>`, and nothing it writes goes to your chat.
 - When you close a handoff, a one-sentence conclusion goes into OpenClaw's daily memory, so your agent still knows what happened.
 - If you mention a handoff in the chat later, the judge recognises it and the PM proposes a follow-up on the panel. It is never sent without your click.
 

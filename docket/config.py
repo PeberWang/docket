@@ -34,7 +34,7 @@ def load() -> dict:
 
 
 def watched(config: dict, session_key: str) -> bool:
-    # Heartbeat and cron sessions never hand work to the docket.
-    if session_key.endswith(":heartbeat") or ":cron:" in session_key or ":desk-" in session_key:
+    # Heartbeat, cron and PM sessions (agent:main:docket-*, and agent:main:desk-* from before the rename) never hand work to the docket.
+    if session_key.endswith(":heartbeat") or ":cron:" in session_key or ":docket-" in session_key or ":desk-" in session_key:
         return False
     return any(fnmatch.fnmatchcase(session_key, pattern) for pattern in config["watch"])
