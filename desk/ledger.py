@@ -12,7 +12,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-HOME = Path(os.environ.get("DESK_HOME", Path.home() / "Library/Application Support/openclaw-desk"))
+HOME = Path(os.environ.get("DESK_HOME", Path.home() / "Library/Application Support/docket"))
 DB = HOME / "desk.sqlite"
 ROUND_LIMIT = 3
 

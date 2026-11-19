@@ -27,7 +27,7 @@ final class DaemonClient {
             return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/openclaw-desk/daemon.json")
+            .appendingPathComponent("Library/Application Support/docket/daemon.json")
     }()
 
     private var info: DaemonInfo?

@@ -3,7 +3,7 @@
 # Data (ledger, config) stays unless you pass --purge.
 set -euo pipefail
 
-LABEL="io.github.peberwang.openclaw-desk"
+LABEL="io.github.peberwang.docket"
 DOMAIN="gui/$(id -u)"
 
 for job in "$LABEL.app" "$LABEL"; do
@@ -13,8 +13,8 @@ done
 rm -rf "$HOME/Applications/Docket.app" "$HOME/.openclaw/workspace/skills/desk-dispatch"
 
 if [ "${1:-}" = "--purge" ]; then
-  rm -rf "$HOME/Library/Application Support/openclaw-desk" "$HOME/Library/Logs/openclaw-desk"
+  rm -rf "$HOME/Library/Application Support/docket" "$HOME/Library/Logs/docket"
   echo "Removed OpenClaw Docket and its data."
 else
-  echo "Removed OpenClaw Docket. Data kept in ~/Library/Application Support/openclaw-desk (use --purge to delete it)."
+  echo "Removed OpenClaw Docket. Data kept in ~/Library/Application Support/docket (use --purge to delete it)."
 fi

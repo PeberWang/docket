@@ -2,7 +2,7 @@
 """Fake Docket service for building and checking Docket.app without the real one.
 
 Serves the API in SPEC.md from memory and writes the real discovery file
-~/Library/Application Support/openclaw-desk/daemon.json by default. Refuses to start
+~/Library/Application Support/docket/daemon.json by default. Refuses to start
 if that file points at a daemon that is still reachable. Python 3.9, standard library only.
 
     python3 app/dev-daemon.py                 # one awaiting + one running delegation
@@ -11,7 +11,7 @@ if that file points at a daemon that is still reachable. Python 3.9, standard li
     python3 app/dev-daemon.py --locale zh     # "locale" field and sample copy in Chinese
     python3 app/dev-daemon.py --discovery app/build/dev-daemon.json
         # side by side with a real daemon; point a debug build at it with
-        # Docket.app/Contents/MacOS/Desk -debugDiscoveryFile <absolute path>
+        # Docket.app/Contents/MacOS/Docket -debugDiscoveryFile <absolute path>
 
 After a decide, the delegation goes pending (3 s) -> running (10 s) -> a new card,
 so the polling path can be watched end to end.
@@ -30,7 +30,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
-DEFAULT_DISCOVERY = os.path.expanduser("~/Library/Application Support/openclaw-desk/daemon.json")
+DEFAULT_DISCOVERY = os.path.expanduser("~/Library/Application Support/docket/daemon.json")
 DISCOVERY = DEFAULT_DISCOVERY
 STATE_ORDER = {"awaiting": 0, "pending": 1, "running": 2, "taken_over": 3, "closed": 4}
 

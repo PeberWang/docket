@@ -5,7 +5,7 @@ state from the daemon's local HTTP API and posts the user's decisions back.
 
 ## Daemon API
 
-Discovery: `~/Library/Application Support/openclaw-desk/daemon.json`
+Discovery: `~/Library/Application Support/docket/daemon.json`
 `{"url": "http://127.0.0.1:<port>", "token": "<hex>"}` — re-read when a request fails
 (the port can change on restart). Every request sends header `X-Desk-Token: <token>`.
 
@@ -64,7 +64,7 @@ Errors: JSON `{"error": "…"}` with 4xx/5xx. If the daemon is unreachable, show
 Language: English is the design language, Chinese the second. The app follows `locale`
 from `GET /api/state`; before the first answer (or while the daemon is down) it follows
 the system's preferred language (zh… → Chinese, otherwise English). All copy lives in one
-en/zh table (`Sources/Desk/Strings.swift`); the examples below give English with Chinese
+en/zh table (`Sources/Docket/Strings.swift`); the examples below give English with Chinese
 in brackets. Calm: no sounds, no notifications, no badges in red.
 
 **Menu bar** (`NSStatusItem`): template SF Symbol `tray` when nothing awaits, `tray.full`
@@ -112,13 +112,13 @@ Refresh: poll `GET /api/state` every 2 s while expanded, every 10 s while collap
 ## Build
 
 SwiftPM executable, macOS 14+, Swift 6 toolchain from Command Line Tools (no Xcode).
-`app/Package.swift`, sources in `app/Sources/Desk/`. A script `app/build.sh` that runs
+`app/Package.swift`, sources in `app/Sources/Docket/`. A script `app/build.sh` that runs
 `swift build -c release`, assembles `build/Docket.app` (Info.plist with
-`LSUIElement = true`, bundle id `io.github.peberwang.openclaw-desk`, name "Docket"; the
-executable inside stays `Desk`, the Swift target name, and launchd points at it), ad-hoc signs it
+`LSUIElement = true`, bundle id `io.github.peberwang.docket`, name "Docket"; the
+executable is `Docket`, which launchd points at), ad-hoc signs it
 (`codesign -s - --force --deep`), and prints the path. No third-party packages.
 For development, `app/dev-daemon.py` is a tiny fake daemon serving the API above with two
 sample delegations (`--all` adds limit / taken over / closed, `--locale en|zh` picks the
 copy, `--discovery PATH` writes a separate discovery file). Point a debug build at it with
 launch arguments, which don't touch the installed app's preferences:
-`build/Docket.app/Contents/MacOS/Desk -debugDiscoveryFile <path> -debugStartExpanded YES`.
+`build/Docket.app/Contents/MacOS/Docket -debugDiscoveryFile <path> -debugStartExpanded YES`.

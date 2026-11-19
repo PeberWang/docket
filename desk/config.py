@@ -1,4 +1,4 @@
-"""User settings: ~/Library/Application Support/openclaw-desk/config.json
+"""User settings: ~/Library/Application Support/docket/config.json
 
 {
   "watch": ["*"],               // OpenClaw session keys whose dispatches go to the desk;

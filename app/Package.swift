@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Desk",
+    name: "Docket",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Desk", path: "Sources/Desk")
+        .executableTarget(name: "Docket", path: "Sources/Docket")
     ]
 )

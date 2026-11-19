@@ -74,8 +74,8 @@ The full rationale is in [docs/design.md](docs/design.md).
 Requirements: macOS 14 or later, Command Line Tools (`xcode-select --install`), [OpenClaw](https://openclaw.ai), and at least one coding agent: [OpenCode](https://opencode.ai) Desktop with the [inbox plugin](https://github.com/PeberWang/opencode-openclaw-inbox) v0.4.0 or later, or the [Claude Code](https://code.claude.com) / [Codex](https://developers.openai.com/codex) CLI, logged in.
 
 ```sh
-git clone https://github.com/PeberWang/openclaw-docket.git
-cd openclaw-docket
+git clone https://github.com/PeberWang/docket.git
+cd docket
 bash scripts/install.sh
 ```
 
@@ -98,7 +98,7 @@ To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too)
 
 ## Configuration
 
-`~/Library/Application Support/openclaw-desk/config.json` (restart the service after editing: `launchctl kickstart -k gui/$(id -u)/io.github.peberwang.openclaw-desk`):
+`~/Library/Application Support/docket/config.json` (restart the service after editing: `launchctl kickstart -k gui/$(id -u)/io.github.peberwang.docket`):
 
 | Key | Default | Meaning |
 |---|---|---|

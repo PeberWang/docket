@@ -34,6 +34,6 @@ Reply to the user with one line, for example "Handed off: <task name>. Follow-up
 
 ## Requirements
 
-- OpenClaw Docket running (its service writes `~/Library/Application Support/openclaw-desk/daemon.json`).
+- OpenClaw Docket running (its service writes `~/Library/Application Support/docket/daemon.json`).
 - For OpenCode: the `opencode-dispatch` skill next to this one (from opencode-openclaw-inbox).
 - For Claude Code or Codex: the `claude` or `codex` CLI installed and logged in.

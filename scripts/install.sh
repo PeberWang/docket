@@ -4,13 +4,13 @@
 #   - writes a default config if there is none
 #   - registers two launchd agents: the service (always on) and the app (at login)
 #   - installs the desk-dispatch skill into OpenClaw, if OpenClaw is present
-# Re-running it upgrades in place. Data in ~/Library/Application Support/openclaw-desk is kept.
+# Re-running it upgrades in place. Data in ~/Library/Application Support/docket is kept.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-LABEL="io.github.peberwang.openclaw-desk"
-DATA="$HOME/Library/Application Support/openclaw-desk"
-LOGS="$HOME/Library/Logs/openclaw-desk"
+LABEL="io.github.peberwang.docket"
+DATA="$HOME/Library/Application Support/docket"
+LOGS="$HOME/Library/Logs/docket"
 AGENTS="$HOME/Library/LaunchAgents"
 DOMAIN="gui/$(id -u)"
 
@@ -76,7 +76,7 @@ cat > "$AGENTS/$LABEL.app.plist" <<EOF
 <dict>
   <key>Label</key><string>$LABEL.app</string>
   <key>ProgramArguments</key>
-  <array><string>$(xml "$HOME/Applications/Docket.app/Contents/MacOS/Desk")</string></array>
+  <array><string>$(xml "$HOME/Applications/Docket.app/Contents/MacOS/Docket")</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Interactive</string>
