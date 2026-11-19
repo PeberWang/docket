@@ -68,6 +68,8 @@ final class Store: ObservableObject {
     private let client = DaemonClient()
     private var pollTask: Task<Void, Never>?
     private var refreshSeq = 0
+    private var refreshesDone = 0
+    private var opening = false
     private var listeners: [@MainActor () -> Void] = []
 
     func observe(_ listener: @escaping @MainActor () -> Void) {
@@ -83,7 +85,7 @@ final class Store: ObservableObject {
     }
 
     func toggle() {
-        if hidden { hidden = false } else { expanded.toggle() }
+        if hidden { hidden = false } else if expanded { expanded = false } else { open() }
     }
 
     /// Collapse first, then withdraw the strip, so hiding never leaves a half-open panel.
@@ -94,6 +96,23 @@ final class Store: ObservableObject {
 
     func toggleHidden() {
         if hidden { hidden = false } else { hide() }
+    }
+
+    /// Fetch first, then expand, so the panel never opens on a list one poll old.
+    /// A slow or absent daemon only delays it briefly.
+    func open() {
+        guard !hidden, !expanded, !opening else { return }
+        opening = true
+        let before = refreshesDone
+        Task {
+            Task { await self.refresh() }
+            for _ in 0..<15 where refreshesDone == before {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            opening = false
+            guard !hidden else { return }
+            expanded = true
+        }
     }
 
     // MARK: Polling
@@ -112,6 +131,7 @@ final class Store: ObservableObject {
     func refresh() async {
         refreshSeq += 1
         let seq = refreshSeq
+        defer { refreshesDone += 1 }
         do {
             let state = try await client.fetchState()
             guard seq == refreshSeq else { return }

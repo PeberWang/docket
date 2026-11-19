@@ -54,7 +54,7 @@ struct PillView: View {
         .background(Color.primary.opacity(hovering ? 0.06 : 0))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { store.expanded = true }
+        .onTapGesture { store.open() }
         .help(store.connection == .down ? store.s(.serviceNotRunning) : store.s(.showDeskHelp))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(axLabel)
