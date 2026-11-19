@@ -7,6 +7,7 @@ if that file points at a daemon that is still reachable. Python 3.9, standard li
 
     python3 app/dev-daemon.py                 # one awaiting + one running delegation
     python3 app/dev-daemon.py --all           # also limit / taken_over / closed samples
+    python3 app/dev-daemon.py --permission    # also an awaiting permission-request card
     python3 app/dev-daemon.py --locale zh     # "locale" field and sample copy in Chinese
     python3 app/dev-daemon.py --discovery app/build/dev-daemon.json
         # side by side with a real daemon; point a debug build at it with
@@ -59,6 +60,11 @@ TEXT = {
         "deps_title": "Upgrade the web app to React 20",
         "deps_progress": "After three rounds, two snapshot tests still fail on the new renderer.",
         "ocr_title": "Speed up the nightly export",
+        "perm_title": "Clean up the scratch folder on the server",
+        "perm_progress": "OpenCode wants to delete files outside the project; deleted files cannot be recovered.",
+        "perm_q": "Allow it?",
+        "perm_once": "Allow once",
+        "perm_reject": "Reject",
         "zotero_title": "Write the migration guide for v3",
         "zotero_conclusion": "Guide is in docs/migrating-to-v3.md, reviewed against the changelog.",
         "next_progress": "The changes are in and the smoke tests pass.",
@@ -99,6 +105,11 @@ TEXT = {
         "deps_title": "前端升级到 React 20",
         "deps_progress": "三轮下来还有两个快照测试过不了，卡在新渲染器上。",
         "ocr_title": "加快每晚的数据导出",
+        "perm_title": "清理服务器上的临时目录",
+        "perm_progress": "OpenCode 想删掉项目目录以外的文件，删掉就找不回来。",
+        "perm_q": "允许吗？",
+        "perm_once": "允许一次",
+        "perm_reject": "拒绝",
         "zotero_title": "写 v3 迁移指南",
         "zotero_conclusion": "指南在 docs/migrating-to-v3.md，已对照更新日志核过。",
         "next_progress": "按你的意思改完了，冒烟测试全部通过。",
@@ -135,7 +146,7 @@ def option(option_id, pair, recommended=False):
     return {"id": option_id, "label": label, "why": why, "recommended": recommended}
 
 
-def sample_delegations(t, include_all):
+def sample_delegations(t, include_all, include_permission=False):
     items = [
         {
             "id": "ses_dev_monitor01",
@@ -193,6 +204,36 @@ def sample_delegations(t, include_all):
             },
         },
     ]
+    if include_permission:
+        items.append(
+            {
+                "id": "ses_dev_perm06",
+                "title": t["perm_title"],
+                "state": "awaiting",
+                "rounds": 0,
+                "round_limit": 3,
+                "dispatched_at": minutes_ago(6),
+                "updated_at": minutes_ago(1),
+                "card": {
+                    "id": 90,
+                    "kind": "question",
+                    "open": True,
+                    "progress": t["perm_progress"],
+                    "decisions": [
+                        {
+                            "id": "permission",
+                            "question": t["perm_q"],
+                            "options": [
+                                option("once", (t["perm_once"], ""), True),
+                                option("reject", (t["perm_reject"], "")),
+                            ],
+                        }
+                    ],
+                    "decided_for_you": [],
+                    "conclusion": None,
+                },
+            }
+        )
     if include_all:
         items += [
             {
@@ -246,11 +287,11 @@ def sample_delegations(t, include_all):
 
 
 class World:
-    def __init__(self, locale, include_all):
+    def __init__(self, locale, include_all, include_permission=False):
         self.lock = threading.Lock()
         self.locale = locale
         self.t = TEXT[locale]
-        self.delegations = sample_delegations(self.t, include_all)
+        self.delegations = sample_delegations(self.t, include_all, include_permission)
         self.next_card_id = 100
         self.timers = {}  # delegation id -> (running_at, card_at) in seconds
 
@@ -482,6 +523,7 @@ def main():
     parser = argparse.ArgumentParser(description="Fake Desk daemon for Desk.app development")
     parser.add_argument("--port", type=int, default=0, help="port to bind (default: any free port)")
     parser.add_argument("--all", action="store_true", help="also serve limit / taken_over / closed samples")
+    parser.add_argument("--permission", action="store_true", help="also serve a permission-request sample (as the real daemon would)")
     parser.add_argument("--locale", choices=sorted(TEXT), default="en", help="locale field and sample copy (default: en)")
     parser.add_argument("--discovery", default=DEFAULT_DISCOVERY, help="discovery file to write (default: the real one)")
     args = parser.parse_args()
@@ -495,7 +537,7 @@ def main():
                  % (DISCOVERY, running))
 
     token = secrets.token_hex(16)
-    world = World(args.locale, args.all)
+    world = World(args.locale, args.all, args.permission)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(world, token))
     url = "http://127.0.0.1:%d" % server.server_address[1]
     write_discovery(url, token)

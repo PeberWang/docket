@@ -35,6 +35,13 @@ final class Store: ObservableObject {
     /// What the user sent, kept locally so answered cards can show it.
     @Published private(set) var sentAnswers: [Int: SentAnswer] = [:]
 
+    /// Whether the permission popup is installed; nil until first checked.
+    @Published private(set) var popupStatus: PermissionPopup.Status?
+    /// A permission request came in and the popup is missing. Shown once per launch, until dismissed.
+    @Published private(set) var showPopupNotice = false
+    private var popupNoticeDismissed = false
+    private var seenPermissionCards: Set<Int> = []
+
     private let client = DaemonClient()
     private var pollTask: Task<Void, Never>?
     private var refreshSeq = 0
@@ -75,9 +82,12 @@ final class Store: ObservableObject {
         do {
             let state = try await client.fetchState()
             guard seq == refreshSeq else { return }
-            delegations = state.delegations
-            awaiting = state.awaiting ?? state.delegations.filter { $0.phase == .awaiting }.count
+            let (shown, permissions) = Self.withoutPermissionCards(state.delegations)
+            delegations = shown
+            // Counted here rather than taken from the daemon: its count includes permission requests.
+            awaiting = shown.filter { $0.phase == .awaiting }.count
             connection = .connected
+            notePermissionRequests(permissions)
             lang = Lang(daemonValue: state.locale) ?? .system
             pruneSelections()
         } catch {
@@ -87,6 +97,46 @@ final class Store: ObservableObject {
             connection = .down
             lang = .system
         }
+        notify()
+    }
+
+    // MARK: Permission requests
+
+    /// Permission requests belong to the popup. A handoff waiting on one shows as still working,
+    /// and its card is dropped. Returns the dropped cards' ids.
+    private static func withoutPermissionCards(_ list: [Delegation]) -> ([Delegation], [Int]) {
+        var dropped: [Int] = []
+        let shown = list.map { delegation -> Delegation in
+            guard delegation.phase == .awaiting, let card = delegation.card, card.open, card.isPermissionRequest else {
+                return delegation
+            }
+            dropped.append(card.id)
+            var working = delegation
+            working.state = Phase.running.rawValue
+            working.card = nil
+            return working
+        }
+        return (shown, dropped)
+    }
+
+    private func notePermissionRequests(_ cards: [Int]) {
+        let fresh = Set(cards).subtracting(seenPermissionCards)
+        guard !fresh.isEmpty else { return }
+        seenPermissionCards.formUnion(fresh)
+        checkPopup()
+        if popupStatus != .installed, !popupNoticeDismissed {
+            showPopupNotice = true
+        }
+    }
+
+    func checkPopup() {
+        popupStatus = PermissionPopup.detect()
+        if popupStatus == .installed { showPopupNotice = false }
+    }
+
+    func dismissPopupNotice() {
+        popupNoticeDismissed = true
+        showPopupNotice = false
         notify()
     }
 

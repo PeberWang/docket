@@ -38,6 +38,8 @@ enum StringKey: Sendable {
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
     // Menu bar
     case showDesk, hideDesk, quit
+    // Permission popup
+    case popupNotice, popupHowTo, copySnippet, copied, dismiss
     // Errors
     case unreadableResponse, serviceReturned
 }
@@ -88,6 +90,14 @@ struct Strings: Sendable {
         .showDesk: ("Show Desk", "显示面板"),
         .hideDesk: ("Hide Desk", "收起面板"),
         .quit: ("Quit", "退出"),
+
+        .popupNotice: ("OpenCode is asking for a permission, and the popup that answers it isn’t installed.",
+                       "OpenCode 有授权要处理，但授权弹窗组件没装。"),
+        .popupHowTo: ("Add \"opencode-permission-notify\" to plugins in ~/.config/opencode/opencode.jsonc, then restart OpenCode. Until then, answer in the OpenCode window.",
+                      "在 ~/.config/opencode/opencode.jsonc 的 plugins 里加上 \"opencode-permission-notify\"，重启 OpenCode。装好前请回 OpenCode 窗口处理。"),
+        .copySnippet: ("Copy config", "复制配置"),
+        .copied: ("Copied", "已复制"),
+        .dismiss: ("Dismiss", "关闭"),
 
         .unreadableResponse: ("Couldn’t read the service’s response", "后台返回的数据无法解析"),
         .serviceReturned: ("The service returned %d", "后台返回 %d"),

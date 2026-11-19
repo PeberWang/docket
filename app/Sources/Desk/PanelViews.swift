@@ -45,14 +45,27 @@ struct PillView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The permission-popup notice, collapsed: a dot in the corner, no text, no extra width.
+        .overlay(alignment: .top) {
+            if store.showPopupNotice {
+                Circle().fill(Color.orange).frame(width: 5, height: 5).padding(.top, 9)
+            }
+        }
         .background(Color.primary.opacity(hovering ? 0.06 : 0))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { store.expanded = true }
         .help(store.connection == .down ? store.s(.serviceNotRunning) : store.s(.showDeskHelp))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(store.awaiting > 0 ? "\(store.s(.panelTitle)), \(store.s.needYou(store.awaiting))" : store.s(.panelTitle))
+        .accessibilityLabel(axLabel)
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var axLabel: String {
+        if store.showPopupNotice {
+            return "\(store.s(.panelTitle)), \(store.s(.popupNotice))"
+        }
+        return store.awaiting > 0 ? "\(store.s(.panelTitle)), \(store.s.needYou(store.awaiting))" : store.s(.panelTitle)
     }
 }
 
@@ -65,6 +78,10 @@ struct ExpandedView: View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.6)
+            if store.showPopupNotice {
+                PopupNotice(store: store)
+                Divider().opacity(0.6)
+            }
             content
         }
         .onExitCommand { store.expanded = false }
@@ -133,6 +150,42 @@ struct ExpandedView: View {
             .font(.system(size: 12.5))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// One line under the header when a permission request came in and the popup is missing.
+struct PopupNotice: View {
+    @ObservedObject var store: Store
+    @ViewState private var copied = false
+
+    var body: some View {
+        let s = store.s
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(s(.popupNotice))
+                    .font(.system(size: 12, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(s(.popupHowTo))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button(copied ? s(.copied) : s(.copySnippet)) {
+                        PermissionPopup.copySnippet()
+                        copied = true
+                    }
+                    .buttonStyle(DeskButtonStyle())
+                    Button(s(.dismiss)) { store.dismissPopupNotice() }
+                        .buttonStyle(DeskButtonStyle())
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 }
 
