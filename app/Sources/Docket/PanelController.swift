@@ -10,7 +10,7 @@ enum PanelMetrics {
     static let expandedInset: CGFloat = 10
 }
 
-final class DeskPanel: NSPanel {
+final class DocketPanel: NSPanel {
     // Borderless windows refuse key status by default; the reply field needs it.
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -23,7 +23,7 @@ final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
 @MainActor
 final class PanelController {
     private let store: Store
-    private let panel: DeskPanel
+    private let panel: DocketPanel
     private let effect = NSVisualEffectView()
     private var appliedExpanded: Bool?
     private var keyMonitor: Any?
@@ -31,7 +31,7 @@ final class PanelController {
 
     init(store: Store) {
         self.store = store
-        panel = DeskPanel(
+        panel = DocketPanel(
             contentRect: NSRect(origin: .zero, size: PanelMetrics.pillSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,

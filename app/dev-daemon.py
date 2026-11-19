@@ -421,7 +421,7 @@ def make_handler(world, token):
     t = world.t
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "desk-dev/0.2"
+        server_version = "docket-dev/0.2"
 
         def log_message(self, fmt, *args):
             if self.command != "GET":

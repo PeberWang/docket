@@ -1,6 +1,6 @@
 import Foundation
 
-enum DeskError: Error {
+enum DocketError: Error {
     case notRunning
     case unreadable
     case status(Int)
@@ -40,12 +40,12 @@ final class DaemonClient {
         return URLSession(configuration: config)
     }()
 
-    func fetchState() async throws -> DeskState {
+    func fetchState() async throws -> DocketState {
         let data = try await send("GET", "/api/state")
         do {
-            return try JSONDecoder().decode(DeskState.self, from: data)
+            return try JSONDecoder().decode(DocketState.self, from: data)
         } catch {
-            throw DeskError.unreadable
+            throw DocketError.unreadable
         }
     }
 
@@ -79,9 +79,9 @@ final class DaemonClient {
 
         for attempt in 0..<2 {
             if info == nil || attempt > 0 { info = Self.readInfo() }
-            guard let info else { throw DeskError.notRunning }
+            guard let info else { throw DocketError.notRunning }
             let base = info.url.hasSuffix("/") ? String(info.url.dropLast()) : info.url
-            guard let url = URL(string: base + path) else { throw DeskError.notRunning }
+            guard let url = URL(string: base + path) else { throw DocketError.notRunning }
 
             var request = URLRequest(url: url)
             request.httpMethod = method
@@ -96,7 +96,7 @@ final class DaemonClient {
                 result = try await session.data(for: request)
             } catch {
                 if attempt == 0 { continue }
-                throw DeskError.notRunning
+                throw DocketError.notRunning
             }
 
             let (data, response) = result
@@ -105,10 +105,10 @@ final class DaemonClient {
             // A stale token means the daemon restarted; re-read discovery once.
             if status == 401, attempt == 0 { continue }
             if let body = try? JSONDecoder().decode(ErrorBody.self, from: data) {
-                throw DeskError.server(body.error)
+                throw DocketError.server(body.error)
             }
-            throw DeskError.status(status)
+            throw DocketError.status(status)
         }
-        throw DeskError.notRunning
+        throw DocketError.notRunning
     }
 }

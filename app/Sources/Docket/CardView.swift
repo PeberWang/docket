@@ -246,9 +246,9 @@ struct CardView: View {
                         }
                     }
                 }
-                .buttonStyle(DeskButtonStyle(prominent: delegation.readyToClose))
+                .buttonStyle(DocketButtonStyle(prominent: delegation.readyToClose))
                 Button(s(delegation.opensInTerminal ? .continueInTerminal : .openInOpenCode)) { store.takeover(delegation) }
-                    .buttonStyle(DeskButtonStyle(prominent: isLimit && !delegation.readyToClose))
+                    .buttonStyle(DocketButtonStyle(prominent: isLimit && !delegation.readyToClose))
             }
             .disabled(busy)
         }

@@ -54,7 +54,7 @@ final class Store: ObservableObject {
     /// delegationID → draft reply text
     @Published var drafts: [String: String] = [:]
     @Published private(set) var busy: Set<String> = []
-    @Published private(set) var errors: [String: DeskError] = [:]
+    @Published private(set) var errors: [String: DocketError] = [:]
     /// What the user sent, kept locally so answered cards can show it.
     @Published private(set) var sentAnswers: [Int: SentAnswer] = [:]
 
@@ -281,7 +281,7 @@ final class Store: ObservableObject {
                 if let settled, settled(self), connection == .connected {
                     onSettled(id)
                 } else {
-                    errors[id] = (error as? DeskError) ?? .server(error.localizedDescription)
+                    errors[id] = (error as? DocketError) ?? .server(error.localizedDescription)
                 }
             }
             busy.remove(id)

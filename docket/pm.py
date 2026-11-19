@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from desk.i18n import LIMITS, TEXT
+from docket.i18n import LIMITS, TEXT
 
 MODEL = None  # None: the OpenClaw agent's own model; config.json "pm_model" overrides
 TIMEOUT = 900

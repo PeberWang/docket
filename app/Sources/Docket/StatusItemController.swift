@@ -57,7 +57,7 @@ final class StatusItemController: NSObject {
     private func showMenu() {
         let s = store.s
         let menu = NSMenu()
-        let toggle = NSMenuItem(title: store.expanded ? s(.hideDesk) : s(.showDesk), action: #selector(togglePanel), keyEquivalent: "d")
+        let toggle = NSMenuItem(title: store.expanded ? s(.hideDocket) : s(.showDocket), action: #selector(togglePanel), keyEquivalent: "d")
         toggle.keyEquivalentModifierMask = [.command, .option]
         toggle.target = self
         menu.addItem(toggle)

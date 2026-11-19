@@ -1,6 +1,6 @@
-"""The desk daemon: watches OpenCode, wakes PMs, keeps the ledger, serves the panel.
+"""The docket daemon: watches OpenCode, wakes PMs, keeps the ledger, serves the panel.
 
-    /usr/bin/python3 -I desk/daemon.py   (launchd runs this; see scripts/install.sh)
+    /usr/bin/python3 -I docket/daemon.py   (launchd runs this; see scripts/install.sh)
 
 Threads:
   events     OpenCode /api/event -> register delegations, wake the PM when a run ends
@@ -27,9 +27,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from desk import config as desk_config  # noqa: E402
-from desk import engines, i18n, ledger, pm, registry  # noqa: E402
-from desk.opencode import Service  # noqa: E402
+from docket import config as docket_config  # noqa: E402
+from docket import engines, i18n, ledger, pm, registry  # noqa: E402
+from docket.opencode import Service  # noqa: E402
 from judge import jev, relevance  # noqa: E402
 from judge.transcript import connect as openclaw_connect  # noqa: E402
 from judge.transcript import messages as transcript_messages  # noqa: E402
@@ -39,12 +39,12 @@ MEMORY_DIR = Path.home() / ".openclaw/workspace/memory"
 MENTION_POLL = 5
 LIVE = ("running", "pending", "awaiting")
 
-log = logging.getLogger("desk")
+log = logging.getLogger("docket")
 
 
-class Desk:
+class Docket:
     def __init__(self):
-        self.settings = desk_config.load()
+        self.settings = docket_config.load()
         self.locale = i18n.resolve(self.settings.get("locale"))
         self.t = i18n.Strings(self.locale)
         pm.configure(self.locale, self.settings.get("pm_model"))
@@ -109,7 +109,7 @@ class Desk:
     def engine(self, row: dict) -> engines.Engine:
         return engines.get(row.get("engine"), self.settings)
 
-    # ---------- CLI engines: the desk starts and follows the process ----------
+    # ---------- CLI engines: the docket starts and follows the process ----------
 
     def dispatch_cli(self, engine_name: str, title: str, directory: str, instruction: str, brief: str, model: str | None) -> str:
         engine = engines.get(engine_name, self.settings)
@@ -160,7 +160,7 @@ class Desk:
         """Missed events must not leave a handoff 'running' forever.
 
         Every minute each running OpenCode handoff is compared with the session's real state;
-        a run that ended after the desk last touched the handoff is treated as a run end.
+        a run that ended after the docket last touched the handoff is treated as a run end.
         """
         while True:
             try:
@@ -520,7 +520,7 @@ class Desk:
             sessions = [
                 (key, sid)
                 for key, sid in conn.execute("select session_key, session_id from session_windows").fetchall()
-                if desk_config.watched(self.settings, key)
+                if docket_config.watched(self.settings, key)
             ]
             for key, session_id in sessions:
                 cursor_key = f"cursor:{session_id}"
@@ -701,7 +701,7 @@ class Desk:
 
 # ---------- HTTP API for Docket.app ----------
 
-def serve(desk: Desk):
+def serve(docket: Docket):
     token = secrets.token_hex(16)
 
     class Handler(BaseHTTPRequestHandler):
@@ -730,8 +730,8 @@ def serve(desk: Desk):
             if not self.authorized():
                 return
             if self.path == "/api/state":
-                items = ledger.snapshot(desk.db())
-                return self.reply(200, {"locale": desk.locale, "awaiting": sum(1 for d in items if d["state"] == "awaiting"), "delegations": items})
+                items = ledger.snapshot(docket.db())
+                return self.reply(200, {"locale": docket.locale, "awaiting": sum(1 for d in items if d["state"] == "awaiting"), "delegations": items})
             self.reply(404, {"error": "not found"})
 
         def do_POST(self):
@@ -744,7 +744,7 @@ def serve(desk: Desk):
                     title = (body.get("title") or "").strip()
                     if not title or not (body.get("instruction") or body.get("brief")):
                         return self.reply(400, {"error": "title and instruction are required"})
-                    handoff = desk.dispatch_cli(
+                    handoff = docket.dispatch_cli(
                         body.get("engine") or "", title, body.get("directory") or str(Path.home()),
                         body.get("instruction") or "", body.get("brief") or "", body.get("model"),
                     )
@@ -753,18 +753,18 @@ def serve(desk: Desk):
                     choices = body.get("choices") or {}
                     reply = (body.get("reply") or "").strip()
                     if not choices and not reply:
-                        return self.reply(400, {"error": desk.t("err_empty")})
-                    desk.decide(int(parts[2]), choices, reply)
+                        return self.reply(400, {"error": docket.t("err_empty")})
+                    docket.decide(int(parts[2]), choices, reply)
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "close":
-                    desk.close(parts[2], (body.get("reply") or "").strip())
+                    docket.close(parts[2], (body.get("reply") or "").strip())
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "takeover":
-                    desk.takeover(parts[2])
+                    docket.takeover(parts[2])
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "retry":
-                    return self.reply(202, {"ok": True, "model": desk.retry(parts[2])})
+                    return self.reply(202, {"ok": True, "model": docket.retry(parts[2])})
                 elif parts[:2] == ["api", "cards"] and len(parts) == 4 and parts[3] == "replay":
-                    desk.replay(int(parts[2]))
+                    docket.replay(int(parts[2]))
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "rewrite":
-                    desk.rewrite(parts[2])
+                    docket.rewrite(parts[2])
                 else:
                     return self.reply(404, {"error": "not found"})
             except ValueError as error:
@@ -784,13 +784,13 @@ def serve(desk: Desk):
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(threadName)s %(message)s")
-    desk = Desk()
-    desk.reconcile()
-    threading.Thread(target=desk.watch_events, name="events", daemon=True).start()
-    threading.Thread(target=desk.watch_mentions, name="mentions", daemon=True).start()
-    threading.Thread(target=desk.watch_runs, name="runs", daemon=True).start()
-    threading.Thread(target=desk.sweep, name="sweep", daemon=True).start()
-    serve(desk)
+    docket = Docket()
+    docket.reconcile()
+    threading.Thread(target=docket.watch_events, name="events", daemon=True).start()
+    threading.Thread(target=docket.watch_mentions, name="mentions", daemon=True).start()
+    threading.Thread(target=docket.watch_runs, name="runs", daemon=True).start()
+    threading.Thread(target=docket.sweep, name="sweep", daemon=True).start()
+    serve(docket)
 
 
 if __name__ == "__main__":

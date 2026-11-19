@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from desk import dispatches  # noqa: E402
+from docket import dispatches  # noqa: E402
 from judge.redact import redact  # noqa: E402
 from judge.transcript import connect, messages, session_id_for  # noqa: E402
 

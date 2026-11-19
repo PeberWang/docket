@@ -1,7 +1,7 @@
 """User settings: ~/Library/Application Support/docket/config.json
 
 {
-  "watch": ["*"],               // OpenClaw session keys whose dispatches go to the desk;
+  "watch": ["*"],               // OpenClaw session keys whose dispatches go to the docket;
                                 // "*" = every session (default); e.g. ["agent:main:main"] for the main chat only
   "context_threshold": 0.5,     // judge: earlier messages at or above this become the card's background
   "move_threshold": 0.85,       // judge: a main-thread message moves only at or above this
@@ -19,7 +19,7 @@ from __future__ import annotations
 import fnmatch
 import json
 
-from desk.ledger import HOME
+from docket.ledger import HOME
 
 PATH = HOME / "config.json"
 DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "🦞 ", "locale": "auto", "engine": "opencode", "pm_model": None, "fallback_model": "deepseek/deepseek-flash"}
@@ -34,7 +34,7 @@ def load() -> dict:
 
 
 def watched(config: dict, session_key: str) -> bool:
-    # Heartbeat and cron sessions never hand work to the desk.
+    # Heartbeat and cron sessions never hand work to the docket.
     if session_key.endswith(":heartbeat") or ":cron:" in session_key or ":desk-" in session_key:
         return False
     return any(fnmatch.fnmatchcase(session_key, pattern) for pattern in config["watch"])

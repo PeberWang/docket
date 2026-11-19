@@ -1,11 +1,11 @@
-"""Coding agents the desk can hand work to.
+"""Coding agents the docket can hand work to.
 
 Every engine answers the same five questions: how to start a task, how to know a run
 ended, what the agent said last, how to send a follow-up, and how the user takes over.
 
 - opencode: started by `opencode-dispatch --detach` (the inbox convention); runs are
-  followed through the OpenCode service's event stream (see desk/daemon.py).
-- claude, codex: started by the desk itself as a detached CLI process whose output goes
+  followed through the OpenCode service's event stream (see docket/daemon.py).
+- claude, codex: started by the docket itself as a detached CLI process whose output goes
   to a file; the supervisor notices the process exit and reads the file. A restart of
   the daemon does not kill a run (new session group), and is picked up from the file.
 
@@ -21,8 +21,8 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from desk.ledger import HOME
-from desk.opencode import Service
+from docket.ledger import HOME
+from docket.opencode import Service
 
 RUNS = HOME / "runs"
 
@@ -131,7 +131,7 @@ class Cli(Engine):
         return {"pid": process.pid, "out": str(out), "process": process}
 
     def resume(self, handoff, text, model: str | None = None):
-        raise RuntimeError("the daemon launches CLI follow-ups itself")  # see Desk.relay
+        raise RuntimeError("the daemon launches CLI follow-ups itself")  # see Docket.relay
 
     def last_reply(self, handoff):
         return ""  # comes from the run's output file

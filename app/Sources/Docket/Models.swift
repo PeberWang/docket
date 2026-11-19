@@ -1,6 +1,6 @@
 import Foundation
 
-struct DeskState: Decodable, Sendable {
+struct DocketState: Decodable, Sendable {
     var locale: String?
     var awaiting: Int?
     var delegations: [Delegation]

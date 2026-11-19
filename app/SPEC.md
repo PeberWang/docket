@@ -1,6 +1,6 @@
 # Docket.app — native panel spec
 
-The app is only a face. All logic lives in the daemon (`desk/`, Python). The app reads
+The app is only a face. All logic lives in the daemon (`docket/`, Python). The app reads
 state from the daemon's local HTTP API and posts the user's decisions back.
 
 ## Daemon API

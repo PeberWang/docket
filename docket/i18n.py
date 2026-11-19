@@ -1,4 +1,4 @@
-"""Language for everything the desk shows or asks the PM to write.
+"""Language for everything the docket shows or asks the PM to write.
 
 `locale` in config.json: "auto" (default, follows the macOS preferred language), "en" or "zh".
 """

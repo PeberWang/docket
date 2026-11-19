@@ -1,4 +1,4 @@
-"""The ledger: the desk's single source of truth for delegations and cards.
+"""The ledger: the docket's single source of truth for delegations and cards.
 
 One SQLite file, independent of both OpenClaw's and OpenCode's databases. The daemon
 writes it; the native app reads it through the daemon's local HTTP API.
@@ -13,14 +13,14 @@ import time
 from pathlib import Path
 
 HOME = Path(os.environ.get("DESK_HOME", Path.home() / "Library/Application Support/docket"))
-DB = HOME / "desk.sqlite"
+DB = HOME / "docket.sqlite"
 ROUND_LIMIT = 3
 
 # A delegation moves through these states:
 #   running       OpenCode is working; nothing for the user to do
 #   pending       the PM is writing a card (OpenCode just finished, failed or asked)
 #   awaiting      a card is waiting for the user's decision
-#   taken_over    the user took it into OpenCode; the desk only shows a link
+#   taken_over    the user took it into OpenCode; the docket only shows a link
 #   closed        done; the conclusion went back to OpenClaw's memory
 STATES = ("running", "pending", "awaiting", "taken_over", "closed")
 
@@ -44,7 +44,7 @@ create table if not exists cards (
   delegation_id text not null references delegations(id) on delete cascade,
   created_at integer not null,
   kind text not null,                  -- report | question | failure | closed | note
-  body text not null,                  -- JSON, see desk/pm.py CARD_SCHEMA
+  body text not null,                  -- JSON, see docket/pm.py CARD_SCHEMA
   resolved_at integer,
   resolution text,                     -- JSON: {"choice": ..., "reply": ..., "action": ...}
   queued integer not null default 0    -- 1: written while another card was open; shown when that one is answered

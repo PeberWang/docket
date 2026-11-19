@@ -31,7 +31,7 @@ if [ ! -f "$DATA/config.json" ]; then
   say "Wrote $DATA/config.json"
 fi
 
-# launchd starts with a bare PATH: give it the directories of the CLIs the desk calls.
+# launchd starts with a bare PATH: give it the directories of the CLIs Docket calls.
 path="/usr/bin:/bin:/usr/sbin:/sbin"
 for tool in openclaw opencode claude codex node; do
   if found="$(command -v "$tool" 2>/dev/null)"; then
@@ -52,7 +52,7 @@ cat > "$AGENTS/$LABEL.plist" <<EOF
   <array>
     <string>/usr/bin/python3</string>
     <string>-I</string>
-    <string>$(xml "$REPO/desk/daemon.py")</string>
+    <string>$(xml "$REPO/docket/daemon.py")</string>
   </array>
   <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
   <key>EnvironmentVariables</key>

@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE = Path.home() / ".local/state/opencode/service.json"
 
-# What the desk reacts to. form.created is OpenCode asking a structured question;
+# What the docket reacts to. form.created is OpenCode asking a structured question;
 # permission.asked should not happen with --auto but is surfaced if it does.
 EVENTS = (
     "session.created",

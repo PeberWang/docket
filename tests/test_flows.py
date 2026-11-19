@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Offline checks of the desk's decision paths (fake PM, fake OpenCode).
+"""Offline checks of the docket's decision paths (fake PM, fake OpenCode).
 
     python3 -I -m unittest discover -s tests -p 'test_*.py'     (from the repository root)
 """
@@ -13,10 +13,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ["DESK_HOME"] = tempfile.mkdtemp(prefix="desk-unit-")
+os.environ["DESK_HOME"] = tempfile.mkdtemp(prefix="docket-unit-")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from desk import daemon, engines, ledger, pm  # noqa: E402
+from docket import daemon, engines, ledger, pm  # noqa: E402
 
 CARD = {"kind": "report", "progress": "p", "decisions": [], "decided_for_you": []}
 
@@ -36,11 +36,11 @@ class Flows(unittest.TestCase):
         engines.Cli.launch = lambda engine, handoff, prompt, first: (_ for _ in ()).throw(AssertionError("no CLI runs in tests"))
         engines.Cli.takeover = engines.OpenCode.takeover = lambda engine, handoff: None
         pm.ask = lambda key, message, validate: self.answers.pop(0)
-        daemon.ledger.DB = Path(tempfile.mkdtemp()) / "desk.sqlite"
+        daemon.ledger.DB = Path(tempfile.mkdtemp()) / "docket.sqlite"
         ledger.connect.__defaults__ = (daemon.ledger.DB,)
-        self.desk = daemon.Desk()
-        self.desk.submit = lambda did, job, *args: job(*args)
-        self.db = self.desk.db()
+        self.docket = daemon.Docket()
+        self.docket.submit = lambda did, job, *args: job(*args)
+        self.db = self.docket.db()
         ledger.add_delegation(self.db, id="ses_x", title="t", directory=None, source_key="k", dispatch_seq=1, dispatched_at=0, brief="", context=[])
 
     def awaiting_card(self):
@@ -50,79 +50,79 @@ class Flows(unittest.TestCase):
 
     def test_mention_relay_needs_confirmation(self):
         self.answers.append({"action": "relay", "message": "do more"})
-        self.desk.act("ses_x", "m", "a chat message")
+        self.docket.act("ses_x", "m", "a chat message")
         card = ledger.open_card(self.db, "ses_x")
         self.assertEqual(json.loads(card["body"])["pending_relay"], "do more")
         self.assertEqual(self.sent, [])
-        self.desk.decide(card["id"], {"relay": "yes"}, "")
+        self.docket.decide(card["id"], {"relay": "yes"}, "")
         self.assertEqual(self.sent, ["do more"])
-        self.assertEqual(self.desk.delegation("ses_x")["rounds"], 1)
+        self.assertEqual(self.docket.delegation("ses_x")["rounds"], 1)
 
     def test_mention_relay_declined_sends_nothing(self):
         self.answers.append({"action": "relay", "message": "do more"})
-        self.desk.act("ses_x", "m", "a chat message")
-        self.desk.decide(ledger.open_card(self.db, "ses_x")["id"], {"relay": "no"}, "")
+        self.docket.act("ses_x", "m", "a chat message")
+        self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {"relay": "no"}, "")
         self.assertEqual(self.sent, [])
 
     def test_round_limit(self):
         for i in range(3):
             self.answers.append({"action": "relay", "message": f"r{i}"})
-            self.desk.decide(self.awaiting_card(), {}, "go")
-        self.assertEqual(self.desk.delegation("ses_x")["rounds"], 3)
-        self.desk.decide(self.awaiting_card(), {}, "one more")
+            self.docket.decide(self.awaiting_card(), {}, "go")
+        self.assertEqual(self.docket.delegation("ses_x")["rounds"], 3)
+        self.docket.decide(self.awaiting_card(), {}, "one more")
         self.assertEqual(len(self.sent), 3)
         self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "limit")
 
     def test_card_and_close_actions(self):
         self.answers.append({"action": "card", "card": dict(CARD, kind="question")})
-        self.desk.decide(self.awaiting_card(), {}, "先问一下")
+        self.docket.decide(self.awaiting_card(), {}, "先问一下")
         self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "question")
         daemon.MEMORY_DIR = Path(tempfile.mkdtemp())
         self.answers.append({"action": "close", "conclusion": "办完了"})
-        self.desk.decide(ledger.open_card(self.db, "ses_x")["id"], {}, "可以了")
-        self.assertEqual(self.desk.delegation("ses_x")["state"], "closed")
+        self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {}, "可以了")
+        self.assertEqual(self.docket.delegation("ses_x")["state"], "closed")
         self.assertIn("办完了", next(daemon.MEMORY_DIR.glob("*.md")).read_text(encoding="utf-8"))
 
     def test_permission_requests_ask_only_when_destructive(self):
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append((request, decision))
         # Reads outside the project are approved silently: the run was started with --auto.
-        self.desk.permission_card("ses_x", {"id": "per_read", "action": "external_directory", "resources": ["/tmp/notes.md"]})
+        self.docket.permission_card("ses_x", {"id": "per_read", "action": "external_directory", "resources": ["/tmp/notes.md"]})
         self.assertEqual(answered, [("per_read", "once")])
         self.assertIsNone(ledger.open_card(self.db, "ses_x"))
         # A destructive one becomes a card and waits for the user.
-        self.desk.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/build"]})
+        self.docket.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/build"]})
         card = ledger.open_card(self.db, "ses_x")
         self.assertEqual(json.loads(card["body"])["pending_permission"], "per_1")
         self.assertNotIn("pending_permission", ledger.snapshot(self.db)[0]["card"])
-        self.desk.decide(card["id"], {"permission": "once"}, "")
+        self.docket.decide(card["id"], {"permission": "once"}, "")
         self.assertEqual(answered[-1], ("per_1", "once"))
-        self.assertEqual(self.desk.delegation("ses_x")["state"], "running")
+        self.assertEqual(self.docket.delegation("ses_x")["state"], "running")
         self.assertEqual(self.sent, [])  # answering a permission is not a round
 
     def test_cards_wait_their_turn_and_none_is_overwritten(self):
-        self.desk.show_card("ses_x", "question", dict(CARD, progress="first"))
-        self.desk.show_card("ses_x", "report", dict(CARD, progress="second"))
+        self.docket.show_card("ses_x", "question", dict(CARD, progress="first"))
+        self.docket.show_card("ses_x", "report", dict(CARD, progress="second"))
         self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "first")
         self.assertEqual(self.db.execute("select count(*) from cards where delegation_id='ses_x' and queued=1").fetchone()[0], 1)
         ledger.resolve_card(self.db, ledger.open_card(self.db, "ses_x")["id"], {"reply": "ok"})
-        self.desk.advance("ses_x")
+        self.docket.advance("ses_x")
         self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "second")
 
     def test_a_permission_card_takes_its_turn_like_any_other(self):
-        self.desk.show_card("ses_x", "question", dict(CARD, progress="brief"))
-        self.desk.permission_card("ses_x", {"id": "per_1", "action": "external_directory", "resources": ["/tmp/a", "/tmp/b"]})
+        self.docket.show_card("ses_x", "question", dict(CARD, progress="brief"))
+        self.docket.permission_card("ses_x", {"id": "per_1", "action": "external_directory", "resources": ["/tmp/a", "/tmp/b"]})
         brief = ledger.open_card(self.db, "ses_x")
         self.assertEqual(json.loads(brief["body"])["progress"], "brief")  # the brief keeps its place
         ledger.resolve_card(self.db, brief["id"], {"reply": "ok"})
-        self.desk.advance("ses_x")
+        self.docket.advance("ses_x")
         permission = ledger.open_card(self.db, "ses_x")
         progress = json.loads(permission["body"])["progress"]
         self.assertIn("read files outside the project", progress)  # one plain sentence
         self.assertNotIn("/tmp/a", progress)  # no raw paths
         answered = []
         engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: answered.append(decision)
-        self.desk.decide(permission["id"], {"permission": "once"}, "")
+        self.docket.decide(permission["id"], {"permission": "once"}, "")
         self.assertEqual(answered, ["once"])
 
     def test_card_validation(self):

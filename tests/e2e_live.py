@@ -4,7 +4,7 @@
     python3 -I tests/e2e_live.py
 
 - ledger, config and the "memory" log live in a temporary DESK_HOME;
-- the dispatch comes from a throwaway OpenClaw session (agent:main:e2e-desk-source),
+- the dispatch comes from a throwaway OpenClaw session (agent:main:e2e-docket-source),
   never the main session, and nothing is delivered to the chat;
 - the OpenCode task writes one file in a scratch directory (model: $E2E_MODEL, else OpenCode's default).
 Everything it creates is deleted at the end.
@@ -23,16 +23,16 @@ import time
 import urllib.request
 from pathlib import Path
 
-SANDBOX = Path(tempfile.mkdtemp(prefix="desk-e2e-"))
+SANDBOX = Path(tempfile.mkdtemp(prefix="docket-e2e-"))
 os.environ["DESK_HOME"] = str(SANDBOX)
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from desk import daemon, ledger  # noqa: E402
-from desk.opencode import Service  # noqa: E402
+from docket import daemon, ledger  # noqa: E402
+from docket.opencode import Service  # noqa: E402
 
-SOURCE = "agent:main:e2e-desk-source"
-WORK = Path.home() / ".local/share/opencode/scratch/desk-e2e"
+SOURCE = "agent:main:e2e-docket-source"
+WORK = Path.home() / ".local/share/opencode/scratch/docket-e2e"
 TITLE = "案头端到端自检"
 
 
@@ -65,9 +65,9 @@ def main():
     daemon.MEMORY_DIR.mkdir()
     WORK.mkdir(parents=True, exist_ok=True)
 
-    desk = daemon.Desk()
-    threading.Thread(target=desk.watch_events, daemon=True).start()
-    threading.Thread(target=daemon.serve, args=(desk,), daemon=True).start()
+    docket = daemon.Docket()
+    threading.Thread(target=docket.watch_events, daemon=True).start()
+    threading.Thread(target=daemon.serve, args=(docket,), daemon=True).start()
     time.sleep(2)
 
     say("asking OpenClaw (sandbox session) to dispatch")
@@ -75,14 +75,14 @@ def main():
     message = (
         "（案头自检，不是真实任务，不要发任何聊天消息。）请只做一件事：执行下面这条命令，然后只回复一句「已交办」。\n\n"
         f"cd {WORK} && {script} --detach --auto --title \"{TITLE}\" " + (f"--model {os.environ['E2E_MODEL']} " if os.environ.get("E2E_MODEL") else "") +
-        "\"在当前目录创建 hello.txt，内容为一行 hello desk。完成后用一句话说明做了什么。\""
+        "\"在当前目录创建 hello.txt，内容为一行 hello docket。完成后用一句话说明做了什么。\""
     )
     done = subprocess.run(["openclaw", "agent", "--session-key", SOURCE, "--json", "--timeout", "300", "--message", message], capture_output=True, text=True, timeout=400)
     say("OpenClaw:", (json.loads(done.stdout).get("result") or {}).get("meta", {}).get("finalAssistantVisibleText", done.stderr[-300:])[:200])
 
     first = wait_for(lambda s: next((d for d in s["delegations"] if d["title"] == TITLE and d["state"] == "awaiting"), None), "first card")
     say("first card:", json.dumps(first["card"], ensure_ascii=False))
-    row = ledger.get(desk.db(), first["id"])
+    row = ledger.get(docket.db(), first["id"])
     say("context messages picked by the judge:", len(json.loads(row["context"] or "[]")))
 
     say("deciding: ask for a second line")

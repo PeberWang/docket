@@ -55,7 +55,7 @@ struct PillView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { store.open() }
-        .help(store.connection == .down ? store.s(.serviceNotRunning) : store.s(.showDeskHelp))
+        .help(store.connection == .down ? store.s(.serviceNotRunning) : store.s(.showDocketHelp))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(axLabel)
         .accessibilityAddTraits(.isButton)
@@ -111,8 +111,8 @@ struct ExpandedView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help(store.s(.hideDeskHelp))
-            .accessibilityLabel(store.s(.hideDesk))
+            .help(store.s(.hideDocketHelp))
+            .accessibilityLabel(store.s(.hideDocket))
         }
         .padding(.leading, 16)
         .padding(.trailing, 10)
@@ -177,9 +177,9 @@ struct PopupNotice: View {
                         PermissionPopup.copySnippet()
                         copied = true
                     }
-                    .buttonStyle(DeskButtonStyle())
+                    .buttonStyle(DocketButtonStyle())
                     Button(s(.dismiss)) { store.dismissPopupNotice() }
-                        .buttonStyle(DeskButtonStyle())
+                        .buttonStyle(DocketButtonStyle())
                 }
             }
             Spacer(minLength: 0)
@@ -192,7 +192,7 @@ struct PopupNotice: View {
 // MARK: - Shared pieces
 
 /// Drawn by hand so the accent color survives the panel being non-key.
-struct DeskButtonStyle: ButtonStyle {
+struct DocketButtonStyle: ButtonStyle {
     var prominent = false
     @Environment(\.isEnabled) private var isEnabled
 

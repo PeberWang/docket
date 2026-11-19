@@ -1,4 +1,4 @@
-"""Turn a new 🦞 OpenCode session into a desk delegation.
+"""Turn a new 🦞 OpenCode session into a docket delegation.
 
 The session tells us the title and the time. The dispatch itself is found in the
 OpenClaw transcripts (only watched sessions), and the judge picks the background.
@@ -10,8 +10,8 @@ import datetime as dt
 import json
 import os
 
-from desk import config as desk_config
-from desk import dispatches
+from docket import config as docket_config
+from docket import dispatches
 from judge import jev, relevance
 from judge.transcript import connect as openclaw_connect
 from judge.transcript import messages
@@ -35,7 +35,7 @@ def find_dispatch(title: str, created_ms: int, settings: dict):
     finally:
         conn.close()
     for key, session_id, seq, created, raw in rows:
-        if not desk_config.watched(settings, key):
+        if not docket_config.watched(settings, key):
             continue
         content = (json.loads(raw).get("message") or {}).get("content") or []
         for part in content if isinstance(content, list) else []:

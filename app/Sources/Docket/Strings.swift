@@ -51,7 +51,7 @@ enum Lang: String, Sendable {
 enum StringKey: Sendable {
     // Panel
     case panelTitle, needYouOne, needYouMany, noHandoffs, serviceNotRunning
-    case showDeskHelp, hideDeskHelp, statusTooltip
+    case showDocketHelp, hideDocketHelp, statusTooltip
     // States
     case phaseAwaiting, phaseReadyToClose, phasePending, phaseRunning, phaseTakenOver, phaseClosed, phaseUnknown
     case activityRunning, activityPending
@@ -61,7 +61,7 @@ enum StringKey: Sendable {
     case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
     // Menu bar
-    case showDesk, hideDesk, hidePanel, showPanel, panelHidden, settings, quit
+    case showDocket, hideDocket, hidePanel, showPanel, panelHidden, settings, quit
     // Settings
     case settingsTitle, settingsInterface, settingsLanguage, languageSystem, settingsShowStrip
     // Permission popup
@@ -82,8 +82,8 @@ struct Strings: Sendable {
         .needYouMany: ("%d waiting on you", "%d 件待你定"),
         .noHandoffs: ("Nothing handed off", "暂无交办"),
         .serviceNotRunning: ("Docket service isn’t running", "案头后台未运行"),
-        .showDeskHelp: ("Show Docket (⌥⌘D)", "展开案头（⌥⌘D）"),
-        .hideDeskHelp: ("Hide (Esc or ⌥⌘D)", "收起（Esc / ⌥⌘D）"),
+        .showDocketHelp: ("Show Docket (⌥⌘D)", "展开案头（⌥⌘D）"),
+        .hideDocketHelp: ("Hide (Esc or ⌥⌘D)", "收起（Esc / ⌥⌘D）"),
         .statusTooltip: ("OpenClaw Docket (⌥⌘D)", "案头（⌥⌘D）"),
 
         .phaseAwaiting: ("Waiting on you", "待你定"),
@@ -114,8 +114,8 @@ struct Strings: Sendable {
         .openInOpenCode: ("Open in OpenCode", "在 OpenCode 打开"),
         .continueInTerminal: ("Continue in Terminal", "在终端接管"),
 
-        .showDesk: ("Show Panel", "展开面板"),
-        .hideDesk: ("Collapse Panel", "收起面板"),
+        .showDocket: ("Show Panel", "展开面板"),
+        .hideDocket: ("Collapse Panel", "收起面板"),
         .hidePanel: ("Hide Sidebar", "隐藏右侧条带"),
         .showPanel: ("Restore Sidebar", "恢复右侧条带"),
         .panelHidden: ("Panel hidden", "面板已隐藏"),
