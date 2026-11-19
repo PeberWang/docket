@@ -436,7 +436,7 @@ def make_handler(world, token):
             self.wfile.write(data)
 
         def _authorized(self):
-            if self.headers.get("X-Desk-Token") != token:
+            if self.headers.get("X-Docket-Token") != token:
                 self._send(401, {"error": t["err_token"]})
                 return False
             return True

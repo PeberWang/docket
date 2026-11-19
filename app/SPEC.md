@@ -7,7 +7,7 @@ state from the daemon's local HTTP API and posts the user's decisions back.
 
 Discovery: `~/Library/Application Support/docket/daemon.json`
 `{"url": "http://127.0.0.1:<port>", "token": "<hex>"}` — re-read when a request fails
-(the port can change on restart). Every request sends header `X-Desk-Token: <token>`.
+(the port can change on restart). Every request sends header `X-Docket-Token: <token>`.
 
 `GET /api/state` →
 

@@ -11,9 +11,9 @@ verifies the delivery, writes briefs and sends follow-ups. Follow-ups never go t
 this script.
 
 Environment:
-  DESK_ENGINE         default engine (else config.json "engine", else opencode)
+  DOCKET_ENGINE         default engine (else config.json "engine", else opencode)
   OPENCODE_DISPATCH   path to opencode-dispatch (default: the sibling OpenClaw skill)
-  DESK_DISPATCH_DRY_RUN=1   print what would happen
+  DOCKET_DISPATCH_DRY_RUN=1   print what would happen
 """
 
 import json
@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-HOME = Path(os.environ.get("DESK_HOME", Path.home() / "Library/Application Support/docket"))
+HOME = Path(os.environ.get("DOCKET_HOME", Path.home() / "Library/Application Support/docket"))
 ENGINES = {"opencode": "OpenCode", "claude": "Claude Code", "codex": "Codex"}
 
 
@@ -63,8 +63,8 @@ def parse(argv):
 
 
 def default_engine() -> str:
-    if os.environ.get("DESK_ENGINE"):
-        return os.environ["DESK_ENGINE"]
+    if os.environ.get("DOCKET_ENGINE"):
+        return os.environ["DOCKET_ENGINE"]
     try:
         return json.loads((HOME / "config.json").read_text(encoding="utf-8")).get("engine") or "opencode"
     except (OSError, ValueError):
@@ -83,7 +83,7 @@ def opencode(options):
     if options["model"]:
         argv += ["--model", options["model"]]
     argv.append(options["instruction"] or "Follow the attached brief.")
-    if os.environ.get("DESK_DISPATCH_DRY_RUN") == "1":
+    if os.environ.get("DOCKET_DISPATCH_DRY_RUN") == "1":
         print(" ".join(argv))
         sys.exit(0)
     os.execvp(argv[0], argv)
@@ -104,7 +104,7 @@ def cli(options, engine):
         "brief": brief,
         "model": options["model"],
     }
-    if os.environ.get("DESK_DISPATCH_DRY_RUN") == "1":
+    if os.environ.get("DOCKET_DISPATCH_DRY_RUN") == "1":
         print(json.dumps({**body, "brief": f"<{len(brief)} chars>"}, ensure_ascii=False))
         sys.exit(0)
     try:
@@ -115,7 +115,7 @@ def cli(options, engine):
         service["url"] + "/api/dispatch",
         data=json.dumps(body).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json", "X-Desk-Token": service["token"]},
+        headers={"Content-Type": "application/json", "X-Docket-Token": service["token"]},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:

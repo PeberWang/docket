@@ -717,7 +717,7 @@ def serve(docket: Docket):
             self.wfile.write(data)
 
         def authorized(self) -> bool:
-            if self.headers.get("X-Desk-Token") == token:
+            if self.headers.get("X-Docket-Token") == token:
                 return True
             self.reply(401, {"error": "bad token"})
             return False

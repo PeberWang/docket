@@ -85,7 +85,7 @@ final class DaemonClient {
 
             var request = URLRequest(url: url)
             request.httpMethod = method
-            request.setValue(info.token, forHTTPHeaderField: "X-Desk-Token")
+            request.setValue(info.token, forHTTPHeaderField: "X-Docket-Token")
             if let body {
                 request.httpBody = body
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")

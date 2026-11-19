@@ -3,7 +3,7 @@
 
     python3 -I tests/e2e_live.py
 
-- ledger, config and the "memory" log live in a temporary DESK_HOME;
+- ledger, config and the "memory" log live in a temporary DOCKET_HOME;
 - the dispatch comes from a throwaway OpenClaw session (agent:main:e2e-docket-source),
   never the main session, and nothing is delivered to the chat;
 - the OpenCode task writes one file in a scratch directory (model: $E2E_MODEL, else OpenCode's default).
@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 
 SANDBOX = Path(tempfile.mkdtemp(prefix="docket-e2e-"))
-os.environ["DESK_HOME"] = str(SANDBOX)
+os.environ["DOCKET_HOME"] = str(SANDBOX)
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -43,7 +43,7 @@ def say(*args):
 def api(method, path, body=None):
     info = json.loads((SANDBOX / "daemon.json").read_text())
     data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(info["url"] + path, data=data, method=method, headers={"X-Desk-Token": info["token"], "Content-Type": "application/json"})
+    request = urllib.request.Request(info["url"] + path, data=data, method=method, headers={"X-Docket-Token": info["token"], "Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
 

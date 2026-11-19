@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ["DESK_HOME"] = tempfile.mkdtemp(prefix="docket-unit-")
+os.environ["DOCKET_HOME"] = tempfile.mkdtemp(prefix="docket-unit-")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from docket import daemon, engines, ledger, pm  # noqa: E402

@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 
 SANDBOX = Path(tempfile.mkdtemp(prefix="docket-cli-"))
-os.environ["DESK_HOME"] = str(SANDBOX)
+os.environ["DOCKET_HOME"] = str(SANDBOX)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from docket import daemon, ledger  # noqa: E402
@@ -39,7 +39,7 @@ def api(method, path, body=None):
     info = json.loads((SANDBOX / "daemon.json").read_text())
     request = urllib.request.Request(
         info["url"] + path, data=json.dumps(body).encode() if body is not None else None, method=method,
-        headers={"X-Desk-Token": info["token"], "Content-Type": "application/json"},
+        headers={"X-Docket-Token": info["token"], "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
