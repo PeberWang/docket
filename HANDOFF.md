@@ -256,3 +256,52 @@ defaults delete io.github.peberwang.docket permissionSettingsPaths   # 回到缺
 ## 安装
 
 要 OpenClaw 按惯例把 `app/build/Docket.app` 装到 `~/Applications/Docket.app` 并重启。版本号没动。
+
+# 交接：卡片队列卡死，修状态机（对应 BRIEF_card_queue_stuck.md）
+
+代码随 `1d6badb` 入库。
+
+## 改了哪几处
+
+1. `Docket.show_card()`（`docket/daemon.py`）：卡片写入后一律置 `awaiting`。入队时仍记 `card:queued`；如果当时只有排队卡、没有开卡（例如续派时上一张刚答完），就把最早的排队卡提为开卡。`pending` 只剩一个意思：PM 作业正在写卡，作业一结束必然离开。
+2. `ledger.push_card()`：写入 question 时，把同一交办所有未解决的 question 标 `resolved`，resolution 为 `{"action":"superseded"}`，并记 `card:superseded` 事件。被顶掉的那张如果正是开卡，新卡直接成为开卡，不进队列。report、failure、limit 不参与。
+   - 与任务书的一处出入：**权限卡（带 `pending_permission` 的 question）既不会被顶掉，新的权限卡也不会顶掉别人**。OpenCode 那边还在等它的回答，顶掉就等于无声拒绝；它在 run 结束时由 `on_run_end()` 标 `expired`，不会成为孤儿。
+3. `Docket.relay()`：续派后如果没有开卡但队列里有卡，提升下一张并置 `awaiting`。原来这里会留下一张看不见的排队卡，要等下一张卡写入才露面。
+4. `Docket.submit()` / `busy()`：按交办计数已提交、未完成的 PM 作业（含还在排队等线程的），供 sweep 判断「当前没有在跑的 PM 作业」。
+5. `Docket.sweep_orphans()`：sweep 每分钟先跑这一步，见下。
+
+## 状态机现在怎么流转
+
+- OpenCode 跑完 / 提问 → `on_run_end()` 置 `pending` → PM 写卡 → `show_card()` 置 `awaiting`（不论入队与否）。
+- 人答卡 → `decide()` 置 `pending` → PM 动作：
+  - 续派 → `running`；若有排队卡，提升并置 `awaiting`；
+  - 出卡 → `show_card()` → `awaiting`；
+  - 结案 → `closed`。
+- 权限卡答完 → `advance()`：有排队卡 → `awaiting`，否则 → `running`。
+- `limit` 只能走向 `closed`、`taken_over`（不变）。
+
+## sweep 的阈值
+
+`Docket.ORPHAN_AFTER = 2 小时`。孤儿的判定：卡片未解决、是开卡（`queued = 0`）、创建超过 2 小时、不是 limit/closed 卡，交办状态是 `running` 或 `pending`，且该交办没有在跑或排队的 PM 作业。命中后标 `{"action":"superseded","note":"orphan"}`，记 `sweep:orphan` 事件；还有开卡就置 `awaiting`，否则 `advance()` 提升下一张排队卡（没有就回 `running`）。
+
+与任务书字面「任何卡片未解决超过两小时」的出入：**`awaiting` 状态下的卡不算孤儿**。那张卡就在面板上，人只是还没答（比如放过夜），自动撤掉会让人丢掉要做的决定。卡死的根源是「状态不是 awaiting，面板看不到卡」，判定只针对这种情形。排队卡（`queued = 1`）本身也不会被撤，只会被提升。
+
+## 测试
+
+`tests/test_flows.py` 新增 7 条，全套 `python3 -I -m unittest discover -s tests -p 'test_*.py'` 通过：
+
+- `test_a_queued_card_leaves_the_handoff_awaiting_not_pending`：已有开卡、状态 pending 时写 report，状态为 awaiting，队列 1。
+- `test_a_new_question_supersedes_the_old_one`：旧 question 变 superseded，新卡是开卡，队列 0。
+- `test_a_question_taking_the_place_of_the_shown_one_jumps_the_queue`：顶掉开卡的新 question 直接成为开卡，排队的 report 继续排着。
+- `test_reports_failures_and_permission_requests_are_never_superseded`。
+- `test_sweep_supersedes_an_orphan_and_lifts_the_queue`：3 小时前的开卡在 pending 下被撤，排队卡提升、状态 awaiting，提升的卡能作答并结案。
+- `test_sweep_leaves_cards_that_are_on_show_or_being_written`：awaiting 下不撤；有 PM 作业时不撤；作业结束后撤，回 running。
+- `test_answering_shows_the_next_card_in_order`：两张卡依次出现，running/awaiting 正确切换，run 结束后 PM 写卡回到 awaiting。
+
+## 手工核对 ses_e0b0f42d1ffe4KTGB9NUM7Jo8n
+
+尚未做：真实账本在 `~/Library/Application Support/docket/docket.sqlite`，在工作区之外，要铭培同意后才能访问。守护进程按新代码重启后，sweep 会在一分钟内按上面的规则自动处理：217 是 12:00 的开卡、状态 pending、早已超过 2 小时，会被标 superseded，223 被提升，状态置 awaiting。
+
+## 要重启什么
+
+守护进程（由 OpenClaw 负责）。app 不用动。
