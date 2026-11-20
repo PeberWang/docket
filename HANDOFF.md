@@ -1,3 +1,171 @@
+# 交接：轮次预算三轮硬上限，案头自身故障不结案（对应 BRIEF_round_budget.md）
+
+## 1. 计数点在哪
+
+规则是人每参与一次就算一轮。计数只在两个地方发生，都走 `ledger.spend_round()`。这个函数在一个 `begin immediate` 事务里同时做三件事：把卡片置为已解决（条件是 `resolved_at is null`）、`rounds + 1`、写一条 `round` 事件。卡片已经被解决过时（双击、两个请求同时到达）返回 None，不计数。
+
+- `Docket.decide()`：任何一张卡被人在面板上解决，包括普通简报卡、问题卡、权限卡，计一轮。权限卡答完不再另外计。
+- `Docket.attribute()`：裁判把聊天里的一句话归到某个交办（mention），计一轮。这句话顺带解决了当时开着的卡，也只算这一轮。
+
+不计数的情形：
+
+- `relay()` 不再加一，计数已经在人解决卡片时完成。
+- mention 之后弹出的「按这句话续派？」确认卡带 `round_spent: true`，确认它和那句聊天算同一次参与，不重复计。
+- `replay()`（重放旧决定）不计。
+- failure 卡上的「重试」按钮（`pm_retry`）不计，那是案头自己出的故障。
+- 结案、接管、权限卡过期、卡片被取代、自动批准的权限、心跳、sweep、超时都不计。
+
+## 2. 上限怎么挡
+
+`ROUND_LIMIT = 3`，新增状态 `limit`。
+
+- 进入 limit：第 3 轮那次参与先被执行，然后 `check_limit()` 调 `enter_limit()`。比如第 3 次回答触发的续派照常发给 OpenCode，不会被吞掉。`enter_limit()` 会撤下所有等待中的卡，挂一张 limit 卡，状态置为 `limit`。
+- 第一道闸 `show_card()`：`rounds >= 3` 时，除 limit 卡本身之外一律拒绝，记 `card:blocked`（带被拒卡片的 kind 和 progress），返回 None。权限卡也走这条路，同样被拒。唯一的例外是 mention 的续派确认卡，因为那一轮已经由 mention 付过了。
+- 第二道闸 `relay()`：保留。改成按真实续派次数判断（`relayed` 事件，fallback 重发不算），满 3 次再续派就记 `relay:blocked`，并进入 limit。
+- `ledger.set_state()`：处于 limit 时，除 `closed` 和 `taken_over` 以外的状态切换一律留在 limit。不靠提示词自觉。
+- `decide()`：limit 状态下或对 limit 卡作答，返回 409「轮次已用完，请接管或结案」。mention 遇到 rounds 已满的交办，记 `mention:blocked`，不计数也不唤醒 PM。
+- 收口：limit 期间 OpenCode 跑完一轮时，`write_card()` 改走 `wrap_up()`，用 `pm.wrap_up_wake()` 让 PM 只准回 close，并且必须写 `remaining`（未完成事项）。这份交接说明写进 limit 卡，人点结案时直接用它；人结案时补了一句话，就重新让 PM 收口一次。`finish()` 会把 `remaining` 拼进结论（「未完成：…」），同时写进 OpenClaw 记忆。接管照旧。
+
+## 3. 案头自身故障不再结案
+
+- 解析（`pm.json_objects` / `extract_json` / `pick`）：依次尝试整段文本、代码块、散文里用 `raw_decode` 扫出的每个对象，还会把被整段引号包了一层的 JSON 再拆开一次。返回第一个通过校验的对象。
+- 重试（`pm.ask`）：第 1 次用 `pm_model`，第 2 次同一模型并附上错误，第 3 次换 `pm_fallback_model`（config.json 的新键，没配就还用 `pm_model`）。每次失败都通过 `ask_pm()` 记一条 `pm:invalid` 事件，带原始回复原文（截前 8000 字）、模型和错误。`openclaw agent` 进程本身失败也算一次尝试。
+- 三次都失败时抛 `PMFailed`，`submit()` 接住后调 `fail_card()`，开一张 failure 卡。卡上写明「案头自身出错，不是任务失败」，附原始回复开头 120 字，带一个「重试」选项（`pm_retry` 记下要重跑的 job 和参数）。卡片保持待处理，状态是 `awaiting`，不会是 `closed`。其他未预料的异常也走同一张卡，文案是「案头自身出错，不是任务失败，工作没有丢」。
+- 面板侧：failure 卡不再算「待结案」（`readyToClose` 排除 failure），结案按钮不再高亮，重试按钮在前。
+- 顺带改的两处（追加条款第 4 条，技术故障不在可结案的情形里）：`sweep` 发现 OpenCode 会话不存在、`maybe_register` 发现派发目录不存在，原来都会直接置 closed，现在只开 failure 卡。后者的旧测试 `test_missing_dispatch_directory_fails_visibly` 断言因此从 `closed` 改成 `awaiting`。
+- 现在只剩三条路径会结案：PM 回 close（`act`）、人点结案（`close`）、limit 后收口。都经过 `finish()`。
+
+### 08:17 那张卡到底怎么被结案的（核对事件表和日志）
+
+「授权分级落地：六类三档」（ses_e0be3f7b…）的经过：
+
+- 08:16:48，人回答卡 201，`act` 唤醒 PM。
+- 08:17:11，PM 两次回复都没有 JSON，抛 `PMError`（daemon.log 第 182 行），`fail_card` 弹出卡 203。卡上没有任何选项。
+- 面板对「没有选项的待处理卡」显示「待结案」，并高亮结案按钮。
+- 08:17:23，卡 203 的 resolution 是 `{"action": "close"}`，也就是 12 秒后有人点了结案。
+- 08:17:26，结案。
+
+所以不是代码在故障时直接置 closed，而是故障卡被界面当成「可以结案」，人顺手点了。早上 07:58 那次（目录未展开，卡 196 → close）是同一个模式。这次修在两层：故障卡改由重试兜底、不再显示「待结案」；PM 回复更难被判为失败。
+
+## 4. 卡片界面
+
+- 页眉显示「第 N 轮 / 共 3 轮」（英文 Round N of 3）。卡片开着时，N 是回答它将要花掉的那一轮（已用 + 1），所以点之前就知道预算。limit 卡和 failure 卡显示已用轮数。
+- limit 卡写「已满 3 轮，请接管。」，状态徽章是「请接管」，隐藏回复框，只剩结案和接管，接管按钮高亮。limit 状态计入菜单栏的待处理数。
+- 改动在 `Models.swift`（`Phase.limit`、`readyToClose`）、`Strings.swift`、`CardView.swift`（`meta`、回复框）、`Store.swift`（待处理计数）。`swift build -c release` 通过。没有跑 `app/build.sh`，没有替换 `app/build/Docket.app`。
+
+## 5. 提示词改了哪几条（`docket/pm.py`）
+
+- `rules()` 第 5 条改成硬规则，三个子项：(a) 每次让人参与都耗一轮，包括权限询问，PM 自己查、自己跑的不算；(b) 出卡前先问自己能不能定，能定的自己定，要问就一次问全，别把一个问题拆成几轮；(c) 预算用尽时案头会拒绝所有卡片，必须收口，把没做完的写成交接说明，不要再问。
+- 新增第 6 条，讲与 coding agent 的协作方式：续派的指令要写成完整任务书，验收标准写在前面，尽量一次写全，减少回头找人。
+- 第 9 条（最终只回一个 JSON）补了「前后不要有散文，不要代码块」。原来重复的第 8 条（语言）和编号重复的第 7 条已合并整理，现在是 1 到 9。
+- `budget_line()` 替换 `decision_wake` 和 `mention_wake` 里原来写死的 `Rounds used: n/3`。第 3 轮时明确告诉 PM「这是最后一轮，卡片会被拒，要么续派最后一条指令，要么结案并填 remaining」。
+- 新增 `wrap_up_wake()`（limit 后的收口）；close action 加了可选的 `remaining` 字段，并做了校验。
+
+## 6. 历史数据脚本
+
+```
+/usr/bin/python3 -I scripts/recount_rounds.py            # 只打印差异，只读打开（mode=ro）
+/usr/bin/python3 -I scripts/recount_rounds.py --apply    # 写库，每行另记一条 rounds:recounted 事件
+/usr/bin/python3 -I scripts/recount_rounds.py --db PATH
+```
+
+口径：人在面板上解决的卡（有选择或有回复，权限卡也算，重放过的只算一次），加上裁判归入的聊天消息（`attributed` 且 belongs ≥ move_threshold，和 via chat 解决的卡去重）。结案、接管、过期、被取代、重试、mention 的续派确认都不算。新代码写过 `round` 事件的行，直接数 `round` 事件。
+
+在真实库上只跑到打印，没有加 `--apply`，没有写库。结果有 7 条不一致：
+
+| 交办 | 状态 | 库里 | 重算 |
+|---|---|---|---|
+| 开源监控证据供给 v3.1 | closed | 1 | 3 |
+| 对外发帖口径审计与沉淀 | taken_over | 3 | 8 |
+| 案头菜单栏加设置项 | closed | 3 | 13（10 张是权限卡） |
+| 产品命名讨论与撞名核查 | closed | 2 | 3 |
+| 授权弹窗不再为已处理的请求弹出 | closed | 2 | 3 |
+| 授权分级：六类与宿主配置合成 | closed | 0 | 2 |
+| 授权分级落地：六类三档 | closed | 0 | 1 |
+
+「授权分级：六类与宿主配置合成」（ses_e0e6ee8f…）实际是 2 轮：卡 193（追问「我什么时候有一律放行的兜底规则」）和卡 194（讲规则集叠加的设计）。你记得的第三次交互，是 07:59 在目录未展开的 failure 卡 196 上点了结案。按任务书的口径，结案是收尾，不算一轮。
+
+偏差最大的是「案头菜单栏加设置项」，库里 3、实际 13，主要是一连串权限卡。这说明旧口径下权限打扰完全没进预算。按新规则，这类交办会在第 3 次权限询问时就进 limit。这一点值得留意：权限卡多的任务会很快耗尽预算。7 条全是已经结束的交办，还在跑的没有差异，要不要 `--apply` 由你定。
+
+## 7. 动过的函数
+
+- `docket/ledger.py`：`STATES`（加 `limit`）、新增 `LIMIT_EXITS`、`set_state`、新增 `spend_round`、`snapshot`（limit 排在最前，`pm_retry`/`wrap_up`/`round_spent` 不外露），以及 schema 里 rounds 的注释。
+- `docket/pm.py`：模块说明、`configure`（加 fallback）、`rules`、`action_format`、新增 `budget_line`、`event_block`、`decision_wake`、`mention_wake`、新增 `wrap_up_wake`、`run`（加 model 参数）、新增 `json_objects`、`extract_json`、`validate_action`（remaining）、新增 `validate_wrap_up`、新增 `PMFailed`、新增 `pick`、`ask`。
+- `docket/daemon.py`：`__init__`（configure 移到后面并传 fallback）、`submit`、新增 `ask_pm`、`show_card`、新增 `RETRYABLE`、`fail_card`、新增 `enter_limit`（取代已删除的 `limit_card`）、`sweep`、`maybe_register`、`write_card`、新增 `wrap_up`、`decide`、新增 `check_limit`、`act`、新增 `relayed_count`、`relay`、`close`、新增 `conclusion_text`、`finish`、`attribute`。
+- `docket/i18n.py`：`limit` 改文案；新增 `err_limit`、`docket_fault`、`pm_failed`、`pm_retry_question`、`pm_retry`、`remaining`（中英文都有）。
+- `docket/config.py`：新增 `pm_fallback_model` 键与说明。
+- `app/Sources/Docket/`：`Models.swift`、`Strings.swift`、`CardView.swift`、`Store.swift`（见第 4 节）。
+- `tests/test_flows.py`：`setUp` 的假 PM 接受 `record`；新增 `REAL_ASK`、`mention`、`rounds`、`real_pm` 三个辅助；`test_mention_relay_needs_confirmation` 改为走真实的 `attribute` 路径；`test_round_limit` 换成新规则下的 `test_three_answers_spend_three_rounds_then_the_limit`；`test_missing_dispatch_directory_fails_visibly` 的状态断言改了；新增 9 条，见第 8 节。
+- 新文件 `scripts/recount_rounds.py`。`README.md` 架构图一行、`app/SPEC.md` 状态说明各改一行。
+
+开工时工作树里没有任务书说的另一张卡（派发目录展开）的未提交改动，它已经是提交 bb39a3f。这次没有动它，也没有回滚任何东西。
+
+## 8. 测试
+
+```
+python3 -I -m unittest discover -s tests -p 'test_*.py'
+Ran 27 tests in 0.188s
+OK
+```
+
+原有 18 条，加上新增 9 条：
+
+- `test_three_answers_spend_three_rounds_then_the_limit`：连续解决三张卡，rounds 依次是 1、2、3；第三次之后进 limit，PM 的第 4 张卡被拒，第 4 次作答返回 409。
+- `test_show_card_is_refused_at_the_limit`：rounds 为 3 时 `show_card` 返回 None，留下 `card:blocked`；权限卡同样被拒；`set_state("running")` 留在 limit。
+- `test_an_answer_that_relays_is_one_round`：一张卡解决并触发续派，只加一。
+- `test_a_chat_mention_is_one_round`：mention 加一，确认续派不再加；mention 顺带解决开着的卡，也只加一。
+- `test_replay_spends_nothing`：replay 不加。
+- `test_answering_a_permission_card_is_one_round`：权限卡解决加一，双击不加。
+- `test_the_third_answer_is_carried_out_then_wrapped_up`：第 3 轮的续派照发；跑完后 PM 写交接说明；结案结论里有 remaining。
+- `test_json_is_found_inside_prose`：从前后散文、代码块、整段被引号包住的 JSON、字符串里含 `}` 的对象中都能抽出 JSON；会跳过不合格的对象，取第一个合格的。
+- `test_a_reply_without_json_is_retried_not_closed`：第 1 次是散文，自动重试；原文记进 `pm:invalid`。
+- `test_three_bad_replies_become_a_failure_card_not_a_closed_handoff`：三次都失败时，模型依次是主、主、fallback；开出 failure 卡，写明不是任务失败，附原始回复，状态是 awaiting 不是 closed；点重试不计轮，重新出卡。
+
+另外，`py_compile` 通过，`swift build -c release` 通过。
+
+## 9. 真机演示
+
+用的是真守护进程的代码和 HTTP 接口（`daemon.serve`，POST `/api/cards/<id>/decide`），账本放在临时 `DOCKET_HOME`。PM 和 OpenCode 换成了脚本替身：每次回答后 PM 都再出一张卡，这是对预算最不利的情况。没有启动 openclaw/opencode 进程，也没有碰正在跑的守护进程和真实库。
+
+```
+before answer 1: state=awaiting rounds=0 card=question 'PM question 1'
+  answer 1: (202, {'ok': True})
+before answer 2: state=awaiting rounds=1 card=question 'PM question 2'
+  answer 2: (202, {'ok': True})
+before answer 3: state=awaiting rounds=2 card=question 'PM question 3'
+  answer 3: (202, {'ok': True})
+after 3 answers: state=limit rounds=3 card=limit 'All 3 rounds used. Please take it over.'
+4th card from the PM: None
+4th answer via HTTP: (409, {'error': 'All rounds are used: take it over or close it.'})
+
+== delegations
+ses_demo|limit|3
+== events
+3|round|{"rounds": 1, "card": 1}
+6|round|{"rounds": 2, "card": 2}
+9|round|{"rounds": 3, "card": 3}
+11|card:blocked|{"kind": "question", "progress": "PM question 4"}
+12|state:limit|
+14|card:blocked|{"kind": "question", "progress": "one more question?"}
+```
+
+（第 1 版替身写错了，act 收到的是卡片而不是 action。结果 PM 连续出错 4 次，每次都是 failure 卡加重试，rounds 始终停在 1，交办一直没有结案，等于顺带验证了故障路径。这条记录不作为验收依据。）
+
+## 10. 要重启什么，对已在跑的卡有什么影响
+
+- 重启 docket 守护进程（launchd `io.github.peberwang.docket`），由 OpenClaw 做。没有数据库迁移，`limit` 只是一个新的 state 字符串。
+- 重新构建并重启 Docket.app（`app/build.sh`）。如果只重启守护进程、不换 app，旧 app 会把 `limit` 显示成「未知」，也不计入待处理数，failure 卡仍显示「待结案」。建议两者一起换。
+- 可选：在 config.json 里加 `"pm_fallback_model"`。当前 `pm_model` 是 `deepseek/deepseek-flash`，第三次可以换一个更守规矩的模型。没配的话，第三次还用 flash。
+- 对在跑的交办（只读查询，现在有两条活着）：
+  - 「轮次预算收紧与案头故障不结案」，running，rounds 2；「Fork 插件：选区时序与面板空白」，awaiting，rounds 0，一张卡开着。
+  - 重启后，它们库里的 rounds 原样接着用，不会补算。之后每回答一张卡都加一，权限卡也算，所以会比以前更快到 3。前一条再参与一次就到 3。
+  - 旧代码出的 mention 确认卡没有 `round_spent`，回答时会计一轮，只影响当下这一张。
+  - 旧代码出的 failure 卡没有重试按钮。回复它算一轮，也可以直接结案。
+  - 旧行如果库里已经 rounds ≥ 3（旧口径下是续派满 3 次），下一张卡会被拒并进入 limit，和旧规则「3 轮后建议接管」一致。
+- 没有提交，没有推送，没有改版本号，没有重启任何进程。
+
+---
+
 # 交接：派发目录里的变量展开（对应 BRIEF_path_expansion.md）
 
 ## 改了什么

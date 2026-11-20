@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from docket import daemon, dispatches, engines, ledger, pm  # noqa: E402
 
+REAL_ASK = pm.ask  # setUp swaps in a fake PM; the PM-failure tests need the real retry loop
 CARD = {"kind": "report", "progress": "p", "decisions": [], "decided_for_you": []}
 
 
@@ -36,7 +37,7 @@ class Flows(unittest.TestCase):
         engines.OpenCode.resume = lambda engine, handoff, text, model=None: sent.append(text)
         engines.Cli.launch = lambda engine, handoff, prompt, first: (_ for _ in ()).throw(AssertionError("no CLI runs in tests"))
         engines.Cli.takeover = engines.OpenCode.takeover = lambda engine, handoff: None
-        pm.ask = lambda key, message, validate: self.answers.pop(0)
+        pm.ask = lambda key, message, validate, record=None: self.answers.pop(0)
         daemon.ledger.DB = Path(tempfile.mkdtemp()) / "docket.sqlite"
         ledger.connect.__defaults__ = (daemon.ledger.DB,)
         self.docket = daemon.Docket()
@@ -49,15 +50,26 @@ class Flows(unittest.TestCase):
         ledger.set_state(self.db, "ses_x", "awaiting")
         return card_id
 
+    def mention(self, text: str):
+        """A main-thread message the judge is sure belongs to ses_x."""
+        message = mock.Mock(seq=7, text=text, time=10, role="user")
+        answer = {"choice": "ses_x", "belongs": 0.95, "new_work": 0.1}
+        with mock.patch.object(daemon.relevance, "attribute", lambda *a: (answer, None)), \
+                mock.patch.object(daemon.relevance, "should_move", lambda *a: True):
+            self.docket.attribute(message, [], [self.docket.delegation("ses_x")])
+
+    def rounds(self):
+        return self.docket.delegation("ses_x")["rounds"]
+
     def test_mention_relay_needs_confirmation(self):
         self.answers.append({"action": "relay", "message": "do more"})
-        self.docket.act("ses_x", "m", "a chat message")
+        self.mention("a chat message")
         card = ledger.open_card(self.db, "ses_x")
         self.assertEqual(json.loads(card["body"])["pending_relay"], "do more")
         self.assertEqual(self.sent, [])
         self.docket.decide(card["id"], {"relay": "yes"}, "")
         self.assertEqual(self.sent, ["do more"])
-        self.assertEqual(self.docket.delegation("ses_x")["rounds"], 1)
+        self.assertEqual(self.rounds(), 1)
 
     def test_mention_relay_declined_sends_nothing(self):
         self.answers.append({"action": "relay", "message": "do more"})
@@ -75,14 +87,163 @@ class Flows(unittest.TestCase):
         self.assertFalse(config.watched(settings, "agent:main:desk-x"))
         self.assertTrue(config.watched(settings, "agent:main:main"))
 
-    def test_round_limit(self):
+    # ---------- the round budget: every time a person takes part is one round ----------
+
+    def test_three_answers_spend_three_rounds_then_the_limit(self):
+        seen = []
         for i in range(3):
-            self.answers.append({"action": "relay", "message": f"r{i}"})
-            self.docket.decide(self.awaiting_card(), {}, "go")
-        self.assertEqual(self.docket.delegation("ses_x")["rounds"], 3)
-        self.docket.decide(self.awaiting_card(), {}, "one more")
-        self.assertEqual(len(self.sent), 3)
+            self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress=f"q{i}")})
+            card = ledger.open_card(self.db, "ses_x")["id"] if i else self.awaiting_card()
+            self.docket.decide(card, {}, f"answer {i}")
+            seen.append(self.rounds())
+        self.assertEqual(seen, [1, 2, 3])
+        row = self.docket.delegation("ses_x")
+        self.assertEqual(row["state"], "limit")
+        card = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(card["kind"], "limit")
+        self.assertIn("3", json.loads(card["body"])["progress"])
+        # The PM's third card was refused, and nothing more can be answered.
+        self.assertEqual(self.db.execute("select count(*) from events where delegation_id = 'ses_x' and kind = 'card:blocked'").fetchone()[0], 1)
+        with self.assertRaises(ValueError):
+            self.docket.decide(card["id"], {}, "one more")
+        self.assertEqual(self.rounds(), 3)
+        self.assertEqual(ledger.snapshot(self.db)[0]["state"], "limit")
+
+    def test_show_card_is_refused_at_the_limit(self):
+        self.db.execute("update delegations set rounds = 3 where id = 'ses_x'")
+        self.assertIsNone(self.docket.show_card("ses_x", "question", dict(CARD, progress="may I ask?")))
+        event = self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'card:blocked'").fetchone()
+        self.assertEqual(json.loads(event[0])["progress"], "may I ask?")
         self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "limit")
+        self.assertEqual(self.docket.delegation("ses_x")["state"], "limit")
+        # A permission request is a card too: refused the same way, and the state stays at the limit.
+        self.docket.permission_card("ses_x", {"id": "per_9", "action": "shell", "resources": ["rm -rf /tmp/x"]})
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "limit")
+        self.assertEqual(self.db.execute("select count(*) from events where delegation_id = 'ses_x' and kind = 'card:blocked'").fetchone()[0], 2)
+        ledger.set_state(self.db, "ses_x", "running")
+        self.assertEqual(self.docket.delegation("ses_x")["state"], "limit")  # only closing or taking over leaves it
+
+    def test_an_answer_that_relays_is_one_round(self):
+        self.answers.append({"action": "relay", "message": "go on"})
+        self.docket.decide(self.awaiting_card(), {}, "go")
+        self.assertEqual(self.sent, ["go on"])
+        self.assertEqual(self.rounds(), 1)
+        self.assertEqual([r["kind"] for r in self.db.execute("select kind from events where delegation_id = 'ses_x' and kind in ('round', 'relayed') order by id")], ["round", "relayed"])
+
+    def test_a_chat_mention_is_one_round(self):
+        self.answers.append({"action": "relay", "message": "from chat"})
+        self.mention("also do Y")
+        self.assertEqual(self.rounds(), 1)
+        self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {"relay": "yes"}, "")
+        self.assertEqual(self.sent, ["from chat"])
+        self.assertEqual(self.rounds(), 1)  # confirming it is the same act of taking part
+        # A mention that answers an open card spends that card with it, still one round.
+        self.awaiting_card()
+        self.answers.append({"action": "card", "card": dict(CARD, kind="question")})
+        self.mention("about that card")
+        self.assertEqual(self.rounds(), 2)
+
+    def test_replay_spends_nothing(self):
+        self.answers.append({"action": "relay", "message": "first"})
+        card = self.awaiting_card()
+        self.docket.decide(card, {"d1": "a"}, "go")
+        self.answers.append({"action": "relay", "message": "again"})
+        self.docket.replay(card)
+        self.assertEqual(self.sent, ["first", "again"])
+        self.assertEqual(self.rounds(), 1)
+
+    def test_answering_a_permission_card_is_one_round(self):
+        engines.OpenCode.answer_permission = lambda engine, handoff, request, decision: None
+        self.docket.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/build"]})
+        self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {"permission": "reject"}, "")
+        self.assertEqual(self.rounds(), 1)
+        self.assertEqual(self.sent, [])
+        # A double click on the same card is not a second round.
+        with self.assertRaises(ValueError):
+            self.docket.decide(self.db.execute("select max(id) from cards").fetchone()[0], {"permission": "reject"}, "")
+        self.assertEqual(self.rounds(), 1)
+
+    def test_the_third_answer_is_carried_out_then_wrapped_up(self):
+        self.db.execute("update delegations set rounds = 2 where id = 'ses_x'")
+        self.answers.append({"action": "relay", "message": "last one"})
+        self.docket.decide(self.awaiting_card(), {}, "finish it")
+        self.assertEqual(self.sent, ["last one"])  # the last round is honoured, not refused
+        self.assertEqual(self.docket.delegation("ses_x")["state"], "limit")
+        # The run ends: the PM writes a handoff note, not a question.
+        self.answers.append({"action": "close", "conclusion": "half done", "remaining": ["docs", "tests"]})
+        self.docket.on_run_end("ses_x", "succeeded", "ok")
+        card = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(card["kind"], "limit")
+        self.assertIn("docs", json.loads(card["body"])["progress"])
+        daemon.MEMORY_DIR = Path(tempfile.mkdtemp())
+        self.docket.close("ses_x", "")
+        row = self.docket.delegation("ses_x")
+        self.assertEqual(row["state"], "closed")
+        conclusion = json.loads(self.db.execute("select body from cards where kind = 'closed'").fetchone()[0])["conclusion"]
+        self.assertIn("half done", conclusion)
+        self.assertIn("tests", conclusion)
+
+    # ---------- the docket's own failures never close a handoff ----------
+
+    def real_pm(self, replies):
+        """The real retry loop with a scripted PM; returns the models each try asked for."""
+        models = []
+
+        def run(key, prompt, timeout=None, model=None):
+            models.append(model)
+            return replies.pop(0)
+
+        for patch in (mock.patch.object(pm, "ask", REAL_ASK), mock.patch.object(pm, "run", run),
+                      mock.patch.object(pm, "MODEL", "main/model"), mock.patch.object(pm, "FALLBACK", "fallback/model")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.docket.submit = lambda did, job, *args: daemon.Docket.submit(self.docket, did, job, *args).result()
+        return models
+
+    def test_json_is_found_inside_prose(self):
+        card = json.dumps(CARD, ensure_ascii=False)
+        for text in (
+            f"好的，核对完了。\n{card}\n以上就是简报。",
+            f"Here it is:\n```json\n{card}\n```\nDone.",
+            json.dumps(card),  # the whole object quoted once more as a string
+            'Note {not json} then {"kind": "report", "progress": "p", "note": "a } in a string"}',
+        ):
+            with self.subTest(text=text[:30]):
+                self.assertEqual(pm.extract_json(text)["kind"], "report")
+        value, errors = pm.pick('first {"action": "nope"} then {"action": "close", "conclusion": "ok"}', pm.validate_action)
+        self.assertEqual((value["action"], errors), ("close", []))
+
+    def test_a_reply_without_json_is_retried_not_closed(self):
+        models = self.real_pm(["I checked everything and it looks fine.", json.dumps(CARD)])
+        self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(models, ["main/model", "main/model"])
+        row = self.docket.delegation("ses_x")
+        self.assertEqual(row["state"], "awaiting")
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "report")
+        event = self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'pm:invalid'").fetchone()
+        self.assertEqual(json.loads(event[0])["raw"], "I checked everything and it looks fine.")
+
+    def test_three_bad_replies_become_a_failure_card_not_a_closed_handoff(self):
+        models = self.real_pm(["prose one", "prose two", "prose three"])
+        self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(models, ["main/model", "main/model", "fallback/model"])
+        row = self.docket.delegation("ses_x")
+        self.assertNotEqual(row["state"], "closed")
+        self.assertEqual(row["state"], "awaiting")
+        card = ledger.open_card(self.db, "ses_x")
+        body = json.loads(card["body"])
+        self.assertEqual(card["kind"], "failure")
+        self.assertTrue(body["docket_fault"])
+        self.assertIn("不是任务失败" if self.docket.locale == "zh" else "not the task", body["progress"])
+        self.assertIn("prose three", body["progress"])
+        raws = [json.loads(d)["raw"] for (d,) in self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'pm:invalid' order by id")]
+        self.assertEqual(raws, ["prose one", "prose two", "prose three"])
+        self.assertNotIn("pm_retry", ledger.snapshot(self.db)[0]["card"])
+        # The retry button runs the PM again and costs no round.
+        self.real_pm([json.dumps(CARD)])
+        self.docket.decide(card["id"], {"retry": "yes"}, "")
+        self.assertEqual(self.rounds(), 0)
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "report")
 
     def test_card_and_close_actions(self):
         self.answers.append({"action": "card", "card": dict(CARD, kind="question")})
@@ -110,7 +271,7 @@ class Flows(unittest.TestCase):
         self.docket.decide(card["id"], {"permission": "once"}, "")
         self.assertEqual(answered[-1], ("per_1", "once"))
         self.assertEqual(self.docket.delegation("ses_x")["state"], "running")
-        self.assertEqual(self.sent, [])  # answering a permission is not a round
+        self.assertEqual(self.sent, [])  # a permission answer goes to OpenCode, not to the PM
 
     def test_permission_tiers(self):
         project = Path(tempfile.mkdtemp()) / "proj"
@@ -161,6 +322,100 @@ class Flows(unittest.TestCase):
         self.docket.advance("ses_x")
         self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "second")
 
+    # ---------- the card queue never locks up ----------
+
+    def state(self):
+        return self.docket.delegation("ses_x")["state"]
+
+    def queued(self):
+        return self.db.execute("select count(*) from cards where delegation_id='ses_x' and resolved_at is null and queued=1").fetchone()[0]
+
+    def test_a_queued_card_leaves_the_handoff_awaiting_not_pending(self):
+        self.docket.show_card("ses_x", "question", dict(CARD, progress="first"))
+        ledger.set_state(self.db, "ses_x", "pending")  # a PM job starts, as on_run_end does
+        self.docket.show_card("ses_x", "report", dict(CARD, progress="second"))
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(self.queued(), 1)
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "first")
+
+    def test_a_new_question_supersedes_the_old_one(self):
+        old = self.docket.show_card("ses_x", "question", dict(CARD, progress="old"))
+        new = self.docket.show_card("ses_x", "question", dict(CARD, progress="new"))
+        card = self.db.execute("select * from cards where id = ?", (old,)).fetchone()
+        self.assertIsNotNone(card["resolved_at"])
+        self.assertEqual(json.loads(card["resolution"]), {"action": "superseded"})
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], new)
+        self.assertEqual(self.queued(), 0)
+        self.assertEqual(self.state(), "awaiting")
+
+    def test_a_question_taking_the_place_of_the_shown_one_jumps_the_queue(self):
+        self.docket.show_card("ses_x", "question", dict(CARD, progress="old"))
+        self.docket.show_card("ses_x", "report", dict(CARD, progress="report"))
+        new = self.docket.show_card("ses_x", "question", dict(CARD, progress="new"))
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], new)
+        self.assertEqual(self.queued(), 1)  # the report still waits behind it
+
+    def test_reports_failures_and_permission_requests_are_never_superseded(self):
+        report = self.docket.show_card("ses_x", "report", dict(CARD, progress="r"))
+        self.docket.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/x"]})
+        self.docket.show_card("ses_x", "question", dict(CARD, progress="q"))
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], report)
+        self.assertEqual(self.queued(), 2)
+        unresolved = self.db.execute("select count(*) from cards where delegation_id='ses_x' and resolved_at is null").fetchone()[0]
+        self.assertEqual(unresolved, 3)
+
+    def test_sweep_supersedes_an_orphan_and_lifts_the_queue(self):
+        orphan = ledger.add_card(self.db, "ses_x", "question", dict(CARD, progress="orphan"))
+        waiting = ledger.add_card(self.db, "ses_x", "report", dict(CARD, progress="waiting"), queued=True)
+        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - 3 * 3600_000, orphan))
+        ledger.set_state(self.db, "ses_x", "pending")
+        self.docket.sweep_orphans()
+        card = self.db.execute("select * from cards where id = ?", (orphan,)).fetchone()
+        self.assertEqual(json.loads(card["resolution"])["action"], "superseded")
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], waiting)
+        self.assertEqual(self.state(), "awaiting")
+        # The lifted card can be answered and the handoff closed.
+        self.answers.append({"action": "close", "conclusion": "done"})
+        self.docket.decide(waiting, {}, "close it")
+        self.assertEqual(self.state(), "closed")
+
+    def test_sweep_leaves_cards_that_are_on_show_or_being_written(self):
+        old = ledger.add_card(self.db, "ses_x", "question", dict(CARD, progress="old"))
+        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - 3 * 3600_000, old))
+        ledger.set_state(self.db, "ses_x", "awaiting")  # on the panel: the user simply has not answered yet
+        self.docket.sweep_orphans()
+        self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
+        ledger.set_state(self.db, "ses_x", "pending")
+        self.docket.jobs["ses_x"] = 1  # a PM job is on its way
+        self.docket.sweep_orphans()
+        self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
+        self.docket.jobs["ses_x"] = 0
+        self.docket.sweep_orphans()
+        self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
+        self.assertEqual(self.state(), "running")  # nothing left to show
+
+    def test_answering_shows_the_next_card_in_order(self):
+        first = self.docket.show_card("ses_x", "report", dict(CARD, progress="first"))
+        second = self.docket.show_card("ses_x", "report", dict(CARD, progress="second"))
+        self.assertEqual(self.state(), "awaiting")
+        # The first answer goes to OpenCode; the second report, waiting behind it, comes up.
+        self.answers.append({"action": "relay", "message": "a"})
+        self.docket.decide(first, {}, "go on")
+        self.assertEqual(self.sent, ["a"])
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], second)
+        self.assertEqual(self.state(), "awaiting")
+        self.answers.append({"action": "relay", "message": "b"})
+        self.docket.decide(second, {}, "fine")
+        self.assertEqual(self.sent, ["a", "b"])
+        self.assertEqual(self.state(), "running")
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
+        # The run ends: pending while the PM writes, awaiting once its card is up.
+        self.answers.append(dict(CARD, progress="done"))
+        engines.OpenCode.last_reply = lambda engine, handoff: "finished"
+        self.docket.on_run_end("ses_x", "succeeded")
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "done")
+
     def test_a_permission_card_takes_its_turn_like_any_other(self):
         self.docket.show_card("ses_x", "question", dict(CARD, progress="brief"))
         self.docket.permission_card("ses_x", {"id": "per_1", "action": "external_directory", "resources": ["/tmp/a", "/tmp/b"]})
@@ -206,7 +461,7 @@ class Flows(unittest.TestCase):
         home = Path(tempfile.mkdtemp()).resolve()
         row = self.register('cd "$HOME/nope" && opencode-dispatch --detach --title "🦞 T" "go"', home)
         self.assertIsNone(row["directory"])  # nothing unrunnable is stored
-        self.assertEqual(row["state"], "closed")
+        self.assertEqual(row["state"], "awaiting")  # a technical fault is shown, never closed for the user
         card = ledger.open_card(self.db, "ses_new")
         self.assertEqual(card["kind"], "failure")
         progress = json.loads(card["body"])["progress"]

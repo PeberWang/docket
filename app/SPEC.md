@@ -19,8 +19,8 @@ Discovery: `~/Library/Application Support/docket/daemon.json`
     {
       "id": "ses_…",                 // OpenCode session id
       "title": "开源监控改本机模式",
-      "state": "awaiting",           // running | pending | awaiting | taken_over | closed
-      "rounds": 1, "round_limit": 3,
+      "state": "awaiting",           // running | pending | awaiting | limit | taken_over | closed
+      "rounds": 1, "round_limit": 3,  // rounds: times the user took part (every answered card, chat mentions)
       "dispatched_at": 1794937892000, "updated_at": 1794939000000,
       "card": {                      // latest card, or null while the first run is going
         "id": 12, "kind": "report",  // report | question | failure | closed | limit

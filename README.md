@@ -57,7 +57,7 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
         │ judge (Jev): your words that belong to the task; later mentions in chat   │
         │ ledger (SQLite): handoffs, briefs, decisions, rounds                      │
         │ PM: one OpenClaw session per handoff, woken only when a run ends          │
-        │ relays your decision to the coding agent, counts rounds (max 3)           │
+        │ relays your decision; each time you take part is one round (max 3)        │
         └───────────────────────────────────────────────────────────────────────────┘
                                          ▲
                              Docket.app: menu bar + panel

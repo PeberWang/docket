@@ -10,6 +10,7 @@
   "locale": "auto",             // "auto" follows macOS, or "en" / "zh"
   "engine": "opencode",         // default coding agent for desk-dispatch: opencode | claude | codex
   "pm_model": null,             // model for PM sessions (openclaw agent --model); null = OpenClaw's default
+  "pm_fallback_model": null,    // third try when the PM's reply failed validation twice; null = pm_model again
   "fallback_model": "deepseek/deepseek-flash"  // coding agent retries once with this when a run hits its usage limit
 }
 """
@@ -22,7 +23,7 @@ import json
 from docket.ledger import HOME
 
 PATH = HOME / "config.json"
-DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "🦞 ", "locale": "auto", "engine": "opencode", "pm_model": None, "fallback_model": "deepseek/deepseek-flash"}
+DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "🦞 ", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": "deepseek/deepseek-flash"}
 
 
 def load() -> dict:

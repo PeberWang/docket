@@ -62,7 +62,7 @@ struct CardView: View {
             if phase != .closed {
                 SectionDivider()
                 VStack(alignment: .leading, spacing: 8) {
-                    if isOpen {
+                    if isOpen && !isLimit {  // at the limit only closing or taking over is left
                         replyField
                     }
                     if let error = store.errors[delegation.id] {
@@ -108,7 +108,10 @@ struct CardView: View {
     }
 
     private var meta: String {
-        var parts = [s(.round, delegation.rounds ?? 0, roundLimit)]
+        // An open card shows the round answering it will spend, so the budget is known before the click.
+        let used = delegation.rounds ?? 0
+        let spends = isOpen && !isLimit && card?.kind != "failure"
+        var parts = [s(.round, spends ? min(used + 1, roundLimit) : used, roundLimit)]
         if let ms = delegation.updatedAt ?? delegation.dispatchedAt {
             parts.append(s.relative(Date(timeIntervalSince1970: ms / 1000)))
         }

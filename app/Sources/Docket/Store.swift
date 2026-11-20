@@ -138,7 +138,7 @@ final class Store: ObservableObject {
             let (shown, permissions) = Self.withoutPermissionCards(state.delegations)
             delegations = shown
             // Counted here rather than taken from the daemon: its count includes permission requests.
-            awaiting = shown.filter { $0.phase == .awaiting }.count
+            awaiting = shown.filter { $0.phase == .awaiting || $0.phase == .limit }.count
             connection = .connected
             notePermissionRequests(permissions)
             daemonLang = Lang(daemonValue: state.locale)

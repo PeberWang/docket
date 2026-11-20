@@ -50,7 +50,6 @@ class Docket:
         self.settings = docket_config.load()
         self.locale = i18n.resolve(self.settings.get("locale"))
         self.t = i18n.Strings(self.locale)
-        pm.configure(self.locale, self.settings.get("pm_model"))
         self.judging = jev.available()
         if not self.judging:
             log.warning("no TypeSafe key: the judge is off (no background picking, no main-thread attribution)")
@@ -58,6 +57,8 @@ class Docket:
         self.workers = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pm")
         self.locks: dict[str, threading.Lock] = {}
         self.locks_guard = threading.Lock()
+        self.jobs: dict[str, int] = {}  # PM jobs submitted and not yet finished, per handoff
+        pm.configure(self.locale, self.settings.get("pm_model"), self.settings.get("pm_fallback_model"))
         db = self.db()
         if not db.execute("select value from kv where key = 'installed_at'").fetchone():
             db.execute("insert into kv values ('installed_at', ?)", (str(ledger.now()),))
@@ -73,28 +74,65 @@ class Docket:
         with self.locks_guard:
             return self.locks.setdefault(delegation_id, threading.Lock())
 
+    def busy(self, delegation_id: str) -> bool:
+        """A PM job for this handoff is running or waiting for a worker."""
+        with self.locks_guard:
+            return self.jobs.get(delegation_id, 0) > 0
+
     def submit(self, delegation_id: str, job, *args):
+        with self.locks_guard:
+            self.jobs[delegation_id] = self.jobs.get(delegation_id, 0) + 1
+
         def run():
-            with self.lock(delegation_id):
-                try:
-                    job(*args)
-                except dispatches.MissingDirectory as error:
-                    log.warning("project directory not found for %s: %r -> %s", delegation_id, error.raw, error.expanded)
-                    self.fail_card(delegation_id, self.t("missing_dir", raw=error.raw, expanded=error.expanded))
-                except Exception as error:  # a PM failure must not take the daemon down
-                    log.exception("job failed for %s", delegation_id)
-                    self.fail_card(delegation_id, self.t("failed", error=error))
+            try:
+                self.run_job(delegation_id, job, args)
+            finally:
+                with self.locks_guard:
+                    self.jobs[delegation_id] -= 1
 
         return self.workers.submit(run)
 
+    def run_job(self, delegation_id: str, job, args):
+        with self.lock(delegation_id):
+            try:
+                job(*args)
+            except dispatches.MissingDirectory as error:
+                log.warning("project directory not found for %s: %r -> %s", delegation_id, error.raw, error.expanded)
+                self.fail_card(delegation_id, self.t("missing_dir", raw=error.raw, expanded=error.expanded))
+            except pm.PMFailed as error:
+                log.warning("PM failed for %s: %s", delegation_id, error)
+                raw = " ".join(error.raw.split())[:120] or "-"
+                self.fail_card(delegation_id, self.t("pm_failed", raw=raw), job, args, str(error))
+            except Exception as error:  # a PM failure must not take the daemon down
+                log.exception("job failed for %s", delegation_id)
+                self.fail_card(delegation_id, self.t("docket_fault", error=str(error)[:200]), job, args, str(error))
+
+    def ask_pm(self, row: dict, message: str, validate):
+        """pm.ask, with every unusable reply kept verbatim in the events for later."""
+        def record(attempt, model, raw, errors):
+            ledger.log(self.db(), row["id"], "pm:invalid", {"attempt": attempt, "model": model, "errors": errors, "raw": raw[:8000]})
+
+        return pm.ask(row["pm_key"], message, validate, record=record)
 
     def show_card(self, delegation_id: str, kind: str, body: dict):
-        """Queue the card if one is already waiting; the panel never swaps an unanswered card."""
+        """Queue the card if one is already waiting; the panel never swaps an unanswered card.
+
+        Once the user has spent every round no card gets through but the limit card,
+        whatever the PM's prompt says. Returns None when the card was refused.
+        """
+        row = ledger.get(self.db(), delegation_id)
+        # The one exception: confirming a mention's relay, a round the mention already paid for.
+        if row and row["rounds"] >= ledger.ROUND_LIMIT and kind != "limit" and not body.get("round_spent"):
+            ledger.log(self.db(), delegation_id, "card:blocked", {"kind": kind, "progress": str(body.get("progress") or "")[:200]})
+            self.enter_limit(delegation_id)
+            return None
         card_id, queued = ledger.push_card(self.db(), delegation_id, kind, body)
-        if not queued:
-            ledger.set_state(self.db(), delegation_id, "awaiting")
-        else:
+        if queued:
             ledger.log(self.db(), delegation_id, "card:queued", {"card": card_id, "kind": kind})
+            if not ledger.open_card(self.db(), delegation_id):  # only queued cards were left: the oldest goes up
+                ledger.next_queued(self.db(), delegation_id)
+        # A card is on show either way, so the panel must show it: never leave the handoff pending.
+        ledger.set_state(self.db(), delegation_id, "awaiting")
         return card_id
 
     def advance(self, delegation_id: str):
@@ -102,11 +140,52 @@ class Docket:
         nxt = ledger.next_queued(self.db(), delegation_id)
         ledger.set_state(self.db(), delegation_id, "awaiting" if nxt else "running")
 
-    def fail_card(self, delegation_id: str, message: str):
+    # Jobs a failure card can run again: their arguments are plain strings, kept in the card.
+    RETRYABLE = ("write_card", "act", "wrap_up", "relay")
+
+    def fail_card(self, delegation_id: str, message: str, job=None, args=(), error: str | None = None):
+        """The docket's own failure: a card that stays open with a retry. It never closes the handoff."""
         db = self.db()
-        if not ledger.get(db, delegation_id):
+        row = ledger.get(db, delegation_id)
+        if not row:
             return
-        self.show_card(delegation_id, "failure", {"progress": message[:240], "decisions": [], "decided_for_you": []})
+        body = {"progress": message[:300], "decisions": [], "decided_for_you": [], "docket_fault": True}
+        name = getattr(job, "__name__", None)
+        if name in self.RETRYABLE and getattr(job, "__self__", None) is self:
+            body["pm_retry"] = {"job": name, "args": list(args)}
+            body["decisions"] = [{
+                "id": "retry",
+                "question": self.t("pm_retry_question"),
+                "options": [{"id": "yes", "label": self.t("pm_retry"), "recommended": True}],
+            }]
+        ledger.log(db, delegation_id, "docket:failed", {"error": (error or message)[:500], "job": name})
+        if row["rounds"] >= ledger.ROUND_LIMIT:
+            # The budget is spent, but the docket's own fault must still be seen and retried:
+            # it takes the limit card's place, and the retry puts the limit card back.
+            db.execute(
+                "update cards set resolved_at = ?, resolution = ? where delegation_id = ? and resolved_at is null and kind = 'limit'",
+                (ledger.now(), json.dumps({"action": "superseded", "note": "docket failure"}), delegation_id),
+            )
+            ledger.add_card(db, delegation_id, "failure", body)
+            ledger.set_state(db, delegation_id, "awaiting")
+            return
+        self.show_card(delegation_id, "failure", body)
+
+    def enter_limit(self, delegation_id: str):
+        """The last round is spent: put up the limit card and withdraw every other waiting card."""
+        row = ledger.get(self.db(), delegation_id)
+        if not row or row["state"] in ("closed", "taken_over"):
+            return
+        if self.db().execute("select 1 from cards where delegation_id = ? and kind = 'limit' and resolved_at is null", (delegation_id,)).fetchone():
+            if row["state"] != "limit":
+                ledger.set_state(self.db(), delegation_id, "limit")
+            return
+        self.db().execute(
+            "update cards set resolved_at = ?, resolution = ? where delegation_id = ? and resolved_at is null",
+            (ledger.now(), json.dumps({"action": "superseded", "note": "limit"}), delegation_id),
+        )
+        ledger.add_card(self.db(), delegation_id, "limit", {"progress": self.t("limit", n=ledger.ROUND_LIMIT), "decisions": [], "decided_for_you": []})
+        ledger.set_state(self.db(), delegation_id, "limit")
 
     def delegation(self, delegation_id: str) -> dict | None:
         row = ledger.get(self.db(), delegation_id)
@@ -175,14 +254,18 @@ class Docket:
         """
         while True:
             try:
+                self.sweep_orphans()
+            except Exception:
+                log.exception("orphan sweep failed")
+            try:
                 for row in self.db().execute("select * from delegations where state = 'running' and engine = 'opencode'").fetchall():
                     try:
                         session = Service().session(row["id"])
                     except Exception as error:
                         if "404" in str(error) or "NotFound" in str(error):
                             log.info("sweep: session %s is gone", row["id"])
-                            self.show_card(row["id"], "failure", {"progress": self.t("session_gone"), "decisions": [], "decided_for_you": []})
-                            ledger.set_state(self.db(), row["id"], "closed")
+                            # A technical fault never closes a handoff: the user closes or takes over.
+                            self.fail_card(row["id"], self.t("session_gone"), error="session not found")
                         continue
                     times = session.get("time") or {}
                     busy = (times.get("busy") or 0) > (times.get("idle") or 0)
@@ -195,6 +278,40 @@ class Docket:
             except Exception:
                 log.exception("sweep failed")
             time.sleep(60)
+
+    ORPHAN_AFTER = 2 * 3600_000  # ms a card may sit unanswered where the panel cannot show it
+
+    def sweep_orphans(self):
+        """A card nobody can see must not hold the queue forever.
+
+        The panel shows a card only while the handoff is awaiting. An open card older than
+        ORPHAN_AFTER on a handoff that is running or pending, with no PM job of its own in
+        flight, is an orphan: it is superseded and the next queued card goes up.
+        """
+        db = self.db()
+        cutoff = ledger.now() - self.ORPHAN_AFTER
+        rows = db.execute(
+            "select distinct d.id from cards c join delegations d on d.id = c.delegation_id"
+            " where c.resolved_at is null and c.queued = 0 and c.created_at < ? and c.kind not in ('limit', 'closed')"
+            " and d.state in ('running', 'pending')",
+            (cutoff,),
+        ).fetchall()
+        for (delegation_id,) in rows:
+            if self.busy(delegation_id):
+                continue
+            with self.lock(delegation_id):
+                stale = db.execute(
+                    "select id from cards where delegation_id = ? and resolved_at is null and queued = 0 and created_at < ? and kind not in ('limit', 'closed')",
+                    (delegation_id, cutoff),
+                ).fetchall()
+                for card in stale:
+                    ledger.resolve_card(db, card["id"], {"action": "superseded", "note": "orphan"})
+                ledger.log(db, delegation_id, "sweep:orphan", {"cards": [c["id"] for c in stale]})
+                log.info("sweep: superseded orphan cards %s on %s", [c["id"] for c in stale], delegation_id)
+                if ledger.open_card(db, delegation_id):
+                    ledger.set_state(db, delegation_id, "awaiting")
+                else:
+                    self.advance(delegation_id)
 
     def watch_runs(self):
         db = self.db()
@@ -269,8 +386,7 @@ class Docket:
         if missing:
             log.warning("dispatch directory not found for %s: %r -> %s", session_id, missing.raw, missing.expanded)
             ledger.log(db, session_id, "directory:missing", {"raw": missing.raw, "expanded": missing.expanded})
-            self.show_card(session_id, "failure", {"progress": self.t("missing_dir", raw=missing.raw, expanded=missing.expanded), "decisions": [], "decided_for_you": []})
-            ledger.set_state(db, session_id, "closed")
+            self.fail_card(session_id, self.t("missing_dir", raw=missing.raw, expanded=missing.expanded))  # stays open; never closed for it
             return
         log.info("registered %s (%s) with %d context messages", name, session_id, len(context))
 
@@ -322,6 +438,8 @@ class Docket:
             return
         if reply is None:
             reply = self.engine(row).last_reply(row)
+        if row["state"] == "limit":  # the budget is spent: a handoff note, never another question
+            return self.wrap_up(session_id, event, reply)
         if event in ("failed", "interrupted") and self.retry_with_fallback(session_id, reply):
             return
         first = not self.db().execute("select 1 from cards where delegation_id = ? limit 1", (session_id,)).fetchone()
@@ -329,12 +447,30 @@ class Docket:
             message = pm.first_wake(row, json.loads(row["context"] or "[]"), event, reply)
         else:
             message = pm.later_wake(event, reply, row["rounds"])
-        card = pm.ask(row["pm_key"], message, pm.validate_card)
+        card = self.ask_pm(row, message, pm.validate_card)
         self.show_card(session_id, card.get("kind", "report"), card)
+
+    def wrap_up(self, delegation_id: str, event: str = "succeeded", reply: str | None = None):
+        """At the limit the PM writes what got done and what is left; the limit card carries it."""
+        row = self.delegation(delegation_id)
+        if not row or row["state"] in ("closed", "taken_over"):
+            return
+        action = self.ask_pm(row, pm.wrap_up_wake(event, reply, row["rounds"]), pm.validate_wrap_up)
+        note = self.conclusion_text(action["conclusion"], action.get("remaining"))
+        self.db().execute(
+            "update cards set resolved_at = ?, resolution = ? where delegation_id = ? and resolved_at is null",
+            (ledger.now(), json.dumps({"action": "superseded", "note": "wrap-up"}), delegation_id),
+        )
+        progress = f"{self.t('limit', n=ledger.ROUND_LIMIT)} {note}"
+        ledger.add_card(self.db(), delegation_id, "limit", {"progress": progress, "decisions": [], "decided_for_you": [], "wrap_up": action})
+        ledger.set_state(self.db(), delegation_id, "limit")
+        ledger.log(self.db(), delegation_id, "wrap_up", {"conclusion": action["conclusion"], "remaining": action.get("remaining") or []})
 
     # ---------- the user acted in the panel ----------
 
     def decide(self, card_id: int, choices: dict, reply: str, replay: bool = False):
+        """The user answered a card. Every answer is one round, spent in the same transaction
+        that resolves the card; what follows from it (a relay, a permission reply) is not another."""
         db = self.db()
         card = db.execute("select * from cards where id = ?", (card_id,)).fetchone()
         if not card or (card["resolved_at"] is not None and not replay):
@@ -342,9 +478,29 @@ class Docket:
         row = self.delegation(card["delegation_id"])
         if row["state"] in ("closed", "taken_over"):
             raise ValueError(self.t("err_over"))
-        if not replay:
-            ledger.resolve_card(db, card_id, {"choices": choices, "reply": reply})
         body = json.loads(card["body"])
+        resolution = {"choices": choices, "reply": reply}
+        if body.get("pm_retry"):  # the docket's own failure: running it again is not a round
+            if not replay:
+                ledger.resolve_card(db, card_id, {**resolution, "action": "retry"})
+            ledger.log(db, row["id"], "docket:retry", {"job": body["pm_retry"]["job"], "card": card_id})
+            ledger.set_state(db, row["id"], "pending")
+            self.submit(row["id"], getattr(self, body["pm_retry"]["job"]), *body["pm_retry"]["args"])
+            return
+        if row["state"] == "limit" or card["kind"] == "limit":
+            raise ValueError(self.t("err_limit"))
+        rounds = row["rounds"]
+        if replay or body.get("round_spent"):
+            # A replay re-runs a past answer; a mention's confirmation was paid for by the mention.
+            if not replay:
+                ledger.resolve_card(db, card_id, resolution)
+        else:
+            if rounds >= ledger.ROUND_LIMIT:
+                self.enter_limit(row["id"])
+                raise ValueError(self.t("err_limit"))
+            rounds = ledger.spend_round(db, row["id"], card_id, resolution)
+            if rounds is None:
+                raise ValueError(self.t("err_answered"))
         if body.get("pending_permission"):  # answering OpenCode's permission request, not the PM
             decision = "once" if choices.get("permission") == "once" else "reject"
             try:
@@ -352,9 +508,9 @@ class Docket:
             except Exception as error:
                 # The run may have finished in the same moment: say so plainly instead of a 500.
                 ledger.log(db, row["id"], "permission:stale", {"error": str(error)[:300]})
-                self.advance(row["id"])
+                self.check_limit(row["id"]) or self.advance(row["id"])
                 raise ValueError(self.t("permission_expired")) from error
-            self.advance(row["id"])
+            self.check_limit(row["id"]) or self.advance(row["id"])
             return
         if body.get("pending_relay"):  # confirming a relay proposed from a chat mention
             if choices.get("relay") == "yes":
@@ -363,12 +519,18 @@ class Docket:
             else:
                 previous = db.execute("select * from cards where delegation_id = ? and id < ? order by id desc limit 1", (row["id"], card_id)).fetchone()
                 ledger.set_state(db, row["id"], "awaiting" if previous and previous["resolved_at"] is None else "running")
-            return
-        if row["rounds"] >= ledger.ROUND_LIMIT:
-            self.limit_card(row["id"])
+                self.check_limit(row["id"])
             return
         ledger.set_state(db, row["id"], "pending")
-        self.submit(row["id"], self.act, row["id"], pm.decision_wake(body, choices, reply, row["rounds"]))
+        self.submit(row["id"], self.act, row["id"], pm.decision_wake(body, choices, reply, rounds))
+
+    def check_limit(self, delegation_id: str) -> bool:
+        """After the user's last round has been carried out, the handoff goes to the limit."""
+        row = ledger.get(self.db(), delegation_id)
+        if row and row["rounds"] >= ledger.ROUND_LIMIT and row["state"] not in ("closed", "taken_over"):
+            self.enter_limit(delegation_id)
+            return True
+        return False
 
     def replay(self, card_id: int):
         """Run an answered card's decision again, e.g. after a bug stopped it the first time."""
@@ -392,9 +554,10 @@ class Docket:
 
         `confirm` holds the chat text when the trigger was a main-thread mention: a relay
         then becomes a card asking the user to confirm, because the judge can be wrong.
+        The mention already cost its round, so the confirmation does not cost another.
         """
         row = self.delegation(delegation_id)
-        action = pm.ask(row["pm_key"], message, pm.validate_action)
+        action = self.ask_pm(row, message, pm.validate_action)
         kind = action["action"]
         if kind == "relay" and confirm is not None:
             t = self.t
@@ -413,6 +576,7 @@ class Docket:
                 ],
                 "decided_for_you": [t("confirm_draft", text=action["message"][:100])],
                 "pending_relay": action["message"],
+                "round_spent": True,
             }
             self.show_card(delegation_id, "question", card)
             return
@@ -421,20 +585,33 @@ class Docket:
         elif kind == "card":
             self.show_card(delegation_id, action["card"].get("kind", "question"), action["card"])
         else:
-            self.finish(delegation_id, action["conclusion"])
+            self.finish(delegation_id, action["conclusion"], action.get("remaining"))
+        self.check_limit(delegation_id)
+
+    def relayed_count(self, delegation_id: str) -> int:
+        return self.db().execute(
+            "select count(*) from events where delegation_id = ? and kind = 'relayed' and coalesce(detail, '') not like '%\"via\": \"fallback\"%'",
+            (delegation_id,),
+        ).fetchone()[0]
 
     def relay(self, delegation_id: str, message: str, model: str | None = None):
+        """Hand the user's decision to the coding agent. Rounds were spent when the user acted;
+        the second gate here only stops more relays than the budget has rounds."""
         row = self.delegation(delegation_id)
-        if row["rounds"] >= ledger.ROUND_LIMIT:
-            self.limit_card(delegation_id)
+        if self.relayed_count(delegation_id) >= ledger.ROUND_LIMIT or row["rounds"] > ledger.ROUND_LIMIT:
+            ledger.log(self.db(), delegation_id, "relay:blocked", {"message": message[:200]})
+            self.enter_limit(delegation_id)
             return
         engine = self.engine(row)
         if isinstance(engine, engines.Cli):
             self.launch(delegation_id, message, first=False)
         else:
             engine.resume(row, message, model)
-        ledger.set_state(self.db(), delegation_id, "running", rounds=row["rounds"] + 1)
+        ledger.set_state(self.db(), delegation_id, "running")
         ledger.log(self.db(), delegation_id, "relayed", {"message": message[:500]})
+        if not ledger.open_card(self.db(), delegation_id) and ledger.next_queued(self.db(), delegation_id):
+            ledger.set_state(self.db(), delegation_id, "awaiting")  # a card was waiting behind the one just answered
+        self.check_limit(delegation_id)
 
     def retry(self, delegation_id: str):
         """Send the last relayed instruction again, on the fallback model."""
@@ -453,9 +630,6 @@ class Docket:
         ledger.log(self.db(), delegation_id, "relayed", {"message": message, "via": "fallback", "model": fallback})
         return fallback
 
-    def limit_card(self, delegation_id: str):
-        self.show_card(delegation_id, "limit", {"progress": self.t("limit", n=ledger.ROUND_LIMIT), "decisions": [], "decided_for_you": []})
-
     def close(self, delegation_id: str, reply: str):
         row = self.delegation(delegation_id)
         if not row or row["state"] == "closed":
@@ -463,20 +637,36 @@ class Docket:
         card = ledger.open_card(self.db(), delegation_id)
         if card:
             ledger.resolve_card(self.db(), card["id"], {"action": "close", "reply": reply})
+        at_limit = row["state"] == "limit"
+        note = json.loads(card["body"]).get("wrap_up") if card and card["kind"] == "limit" else None
         ledger.set_state(self.db(), delegation_id, "pending")
 
         def job():
-            action = pm.ask(row["pm_key"], pm.close_wake(reply), pm.validate_action)
+            if note and not reply:  # the PM already wrote the handoff note when the budget ran out
+                return self.finish(delegation_id, note["conclusion"], note.get("remaining"))
+            if at_limit:
+                action = self.ask_pm(row, pm.wrap_up_wake("closed", None, row["rounds"]) + (f"\n\nThe user added: {reply}" if reply else ""), pm.validate_wrap_up)
+            else:
+                action = self.ask_pm(row, pm.close_wake(reply), pm.validate_action)
             conclusion = action.get("conclusion") if action["action"] == "close" else self.t("closed_fallback")
-            self.finish(delegation_id, conclusion)
+            self.finish(delegation_id, conclusion, action.get("remaining"))
 
         self.submit(delegation_id, job)
 
-    def finish(self, delegation_id: str, conclusion: str):
+    def conclusion_text(self, conclusion: str, remaining: list | None) -> str:
+        items = [r.strip() for r in remaining or [] if r and r.strip()]
+        if not items:
+            return conclusion
+        separator = "；" if self.locale == "zh" else "; "
+        return f"{conclusion} {self.t('remaining', items=separator.join(items))}"
+
+    def finish(self, delegation_id: str, conclusion: str, remaining: list | None = None):
+        """The only way a handoff closes: the PM judged it done, the user closed it, or the budget ran out."""
         row = self.delegation(delegation_id)
+        conclusion = self.conclusion_text(conclusion, remaining)
         for card in self.db().execute("select id from cards where delegation_id = ? and resolved_at is null", (delegation_id,)).fetchall():
             ledger.resolve_card(self.db(), card["id"], {"action": "closed"})
-        ledger.add_card(self.db(), delegation_id, "closed", {"progress": conclusion, "conclusion": conclusion, "decisions": [], "decided_for_you": []})
+        ledger.add_card(self.db(), delegation_id, "closed", {"progress": conclusion, "conclusion": conclusion, "remaining": remaining or [], "decisions": [], "decided_for_you": []})
         ledger.set_state(self.db(), delegation_id, "closed")
         self.write_memory(row, conclusion)
 
@@ -598,11 +788,17 @@ class Docket:
         delegation_id = answer["choice"]
         row = self.delegation(delegation_id)
         log.info("main-thread message m%s belongs to %s", message.seq, row["title"])
+        if row["rounds"] >= ledger.ROUND_LIMIT:
+            ledger.log(self.db(), delegation_id, "mention:blocked", {"seq": message.seq})
+            self.enter_limit(delegation_id)
+            return
         card = ledger.open_card(self.db(), delegation_id)
-        if card:
-            ledger.resolve_card(self.db(), card["id"], {"reply": message.text, "via": "chat"})
+        # Writing about the handoff in the chat is taking part: one round, with the card it answers.
+        rounds = ledger.spend_round(self.db(), delegation_id, card["id"] if card else None, {"reply": message.text, "via": "chat"})
+        if rounds is None:  # the card was answered on the panel in the same moment
+            rounds = ledger.spend_round(self.db(), delegation_id)
         ledger.set_state(self.db(), delegation_id, "pending")
-        self.submit(delegation_id, self.act, delegation_id, pm.mention_wake(message.text, row["rounds"]), message.text)
+        self.submit(delegation_id, self.act, delegation_id, pm.mention_wake(message.text, rounds), message.text)
 
     # ---------- OpenCode events ----------
 

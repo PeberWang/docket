@@ -20,9 +20,12 @@ ROUND_LIMIT = 3
 #   running       OpenCode is working; nothing for the user to do
 #   pending       the PM is writing a card (OpenCode just finished, failed or asked)
 #   awaiting      a card is waiting for the user's decision
+#   limit         the user has spent all ROUND_LIMIT rounds; no more cards, only close or take over
 #   taken_over    the user took it into OpenCode; the docket only shows a link
 #   closed        done; the conclusion went back to OpenClaw's memory
-STATES = ("running", "pending", "awaiting", "taken_over", "closed")
+STATES = ("running", "pending", "awaiting", "limit", "taken_over", "closed")
+# Once at the limit a handoff stays there: only an ending moves it on.
+LIMIT_EXITS = ("taken_over", "closed")
 
 SCHEMA = """
 create table if not exists delegations (
@@ -33,7 +36,7 @@ create table if not exists delegations (
   dispatch_seq integer,                -- transcript seq of the dispatch call
   dispatched_at integer not null,      -- epoch ms
   state text not null default 'running',
-  rounds integer not null default 0,   -- user decisions relayed to OpenCode
+  rounds integer not null default 0,   -- times a person took part (answered a card, wrote in chat); see spend_round
   pm_key text not null,                -- OpenClaw session key of this delegation's PM
   brief text,
   context text,                        -- JSON: [{id, role, time, text, score}] chosen by the judge
@@ -129,6 +132,9 @@ def pm_key(delegation_id: str) -> str:
 
 def set_state(conn, delegation_id: str, state: str, **fields) -> None:
     assert state in STATES, state
+    current = conn.execute("select state from delegations where id = ?", (delegation_id,)).fetchone()
+    if current and current[0] == "limit" and state not in LIMIT_EXITS:
+        state = "limit"
     columns = ["state = ?", "updated_at = ?"] + [f"{name} = ?" for name in fields]
     conn.execute(f"update delegations set {', '.join(columns)} where id = ?", (state, now(), *fields.values(), delegation_id))
     log(conn, delegation_id, f"state:{state}", fields or None)
@@ -148,10 +154,25 @@ def push_card(conn, delegation_id: str, kind: str, body: dict) -> tuple[int, boo
     A permission request is one of these cards: without an answer the work cannot go on,
     so it must not be skipped either. Answered cards drop out of the list entirely.
     Returns (card id, queued).
+
+    The one exception is a question: only the newest unanswered question stands. An older
+    one (never a permission request, which OpenCode is still waiting on) is superseded, and
+    if it was the card on show the new question takes its place instead of queueing.
     """
-    queued = open_card(conn, delegation_id) is not None or bool(
+    took_place = False
+    if kind == "question" and not body.get("pending_permission"):
+        shown = open_card(conn, delegation_id)
+        for old in conn.execute(
+            "select id, body from cards where delegation_id = ? and resolved_at is null and kind = 'question'", (delegation_id,)
+        ).fetchall():
+            if json.loads(old["body"]).get("pending_permission"):
+                continue
+            resolve_card(conn, old["id"], {"action": "superseded"})
+            log(conn, delegation_id, "card:superseded", {"card": old["id"], "by": "question"})
+            took_place = took_place or (shown is not None and shown["id"] == old["id"])
+    queued = open_card(conn, delegation_id) is not None or (not took_place and bool(
         conn.execute("select 1 from cards where delegation_id = ? and resolved_at is null and queued = 1", (delegation_id,)).fetchone()
-    )
+    ))
     return add_card(conn, delegation_id, kind, body, queued=queued), queued
 
 
@@ -185,6 +206,32 @@ def resolve_card(conn, card_id: int, resolution: dict) -> None:
     )
 
 
+def spend_round(conn, delegation_id: str, card_id: int | None = None, resolution: dict | None = None) -> int | None:
+    """A person took part: add one round, in one transaction with resolving their card.
+
+    Returns the new round count, or None when the card was already resolved (a double
+    click, or two requests racing): that answer is not a second round.
+    """
+    conn.execute("begin immediate")
+    try:
+        if card_id is not None:
+            done = conn.execute(
+                "update cards set resolved_at = ?, resolution = ? where id = ? and resolved_at is null",
+                (now(), json.dumps(resolution or {}, ensure_ascii=False), card_id),
+            )
+            if done.rowcount == 0:
+                conn.execute("rollback")
+                return None
+        conn.execute("update delegations set rounds = rounds + 1, updated_at = ? where id = ?", (now(), delegation_id))
+        rounds = conn.execute("select rounds from delegations where id = ?", (delegation_id,)).fetchone()[0]
+        log(conn, delegation_id, "round", {"rounds": rounds, "card": card_id})
+        conn.execute("commit")
+    except BaseException:
+        conn.execute("rollback")
+        raise
+    return rounds
+
+
 def active(conn) -> list:
     return conn.execute("select * from delegations where state not in ('closed') order by dispatched_at").fetchall()
 
@@ -195,7 +242,7 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
     rows = conn.execute(
         "select * from delegations where state not in ('closed', 'taken_over')"
         " or updated_at >= ? order by "
-        "case state when 'awaiting' then 0 when 'pending' then 1 when 'running' then 2 when 'taken_over' then 3 else 4 end, updated_at desc",
+        "case state when 'awaiting' then 0 when 'limit' then 0 when 'pending' then 1 when 'running' then 2 when 'taken_over' then 3 else 4 end, updated_at desc",
         (since,),
     ).fetchall()
     out = []
@@ -226,7 +273,7 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
                     "id": last["id"],
                     "kind": last["kind"],
                     "open": last["resolved_at"] is None,
-                    **{k: _clean(v) for k, v in json.loads(last["body"]).items() if k not in ("pending_relay", "pending_permission")},
+                    **{k: _clean(v) for k, v in json.loads(last["body"]).items() if k not in ("pending_relay", "pending_permission", "pm_retry", "wrap_up", "round_spent")},
                     **({"choices": answer.get("choices") or {}, "reply": answer.get("reply") or ""} if answer else {}),
                 }
                 if last

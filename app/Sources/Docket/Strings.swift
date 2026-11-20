@@ -53,7 +53,7 @@ enum StringKey: Sendable {
     case panelTitle, needYouOne, needYouMany, noHandoffs, serviceNotRunning
     case showDocketHelp, hideDocketHelp, statusTooltip
     // States
-    case phaseAwaiting, phaseReadyToClose, phasePending, phaseRunning, phaseTakenOver, phaseClosed, phaseUnknown
+    case phaseAwaiting, phaseReadyToClose, phasePending, phaseRunning, phaseLimit, phaseTakenOver, phaseClosed, phaseUnknown
     case activityRunning, activityPending
     // Card
     case round, queued, metaSeparator, justNow, nothingToDecide
@@ -92,13 +92,14 @@ struct Strings: Sendable {
         .nothingToDecide: ("Nothing needs a decision. Close it when you are happy.", "没有要你定的事，确认没问题就可以结案。"),
         .phasePending: ("Writing brief", "处理中"),
         .phaseRunning: ("Working", "执行中"),
+        .phaseLimit: ("Take it over", "请接管"),
         .phaseTakenOver: ("With you", "已接管"),
         .phaseClosed: ("Done", "已结案"),
         .phaseUnknown: ("Unknown", "未知"),
         .activityRunning: ("Working…", "执行中…"),
         .activityPending: ("Writing the next brief…", "PM 整理中…"),
 
-        .round: ("Round %d of %d", "第 %d/%d 轮"),
+        .round: ("Round %d of %d", "第 %d 轮 / 共 %d 轮"),
         .queued: ("%d more waiting", "另有 %d 张等候"),
         .metaSeparator: (" · ", " · "),
         .justNow: ("Just now", "刚刚"),
@@ -106,8 +107,8 @@ struct Strings: Sendable {
         .handledForYou: ("Decided for you (%d)", "已代你定 %d 项"),
         .answerChoice: ("%@ → %@", "%@ → %@"),
         .youSaid: ("You said: %@", "你说：%@"),
-        .roundsUsed: ("%d rounds used. Take it over in OpenCode.", "已满 %d 轮，建议接管"),
-        .roundsUsedTerminal: ("%d rounds used. Take it over in Terminal.", "已满 %d 轮，建议在终端接管"),
+        .roundsUsed: ("All %d rounds used. Take it over in OpenCode.", "已满 %d 轮，请接管"),
+        .roundsUsedTerminal: ("All %d rounds used. Take it over in Terminal.", "已满 %d 轮，请在终端接管"),
         .replyPlaceholder: ("Reply…", "回一句…"),
         .send: ("Send", "发送"),
         .close: ("Mark done", "结案"),
@@ -166,6 +167,7 @@ struct Strings: Sendable {
         case .awaiting: self(.phaseAwaiting)
         case .pending: self(.phasePending)
         case .running: self(.phaseRunning)
+        case .limit: self(.phaseLimit)
         case .takenOver: self(.phaseTakenOver)
         case .closed: self(.phaseClosed)
         case .unknown: self(.phaseUnknown)
