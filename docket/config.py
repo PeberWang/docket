@@ -21,6 +21,7 @@ import fnmatch
 import json
 
 from docket.ledger import HOME
+from judge.transcript import canonical_key
 
 PATH = HOME / "config.json"
 DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "🦞 ", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": "deepseek/deepseek-flash"}
@@ -35,7 +36,9 @@ def load() -> dict:
 
 
 def watched(config: dict, session_key: str) -> bool:
-    # Heartbeat, cron and PM sessions (agent:main:docket-*, and agent:main:desk-* from before the rename) never hand work to the docket.
-    if session_key.endswith(":heartbeat") or ":cron:" in session_key or ":docket-" in session_key or ":desk-" in session_key:
+    # OpenClaw 2026.11 keys the heartbeat window of a chat `agent:main:main:heartbeat`: that is the same chat, judged by its plain key.
+    session_key = canonical_key(session_key)
+    # Cron and PM sessions (agent:main:docket-*, and agent:main:desk-* from before the rename) never hand work to the docket.
+    if ":cron:" in session_key or ":docket-" in session_key or ":desk-" in session_key:
         return False
     return any(fnmatch.fnmatchcase(session_key, pattern) for pattern in config["watch"])

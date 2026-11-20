@@ -12,46 +12,60 @@ import json
 from docket import config as docket_config
 from docket import dispatches
 from judge import jev, relevance
+from judge.transcript import MESSAGE_FILTER, messages, normalize, session_keys
 from judge.transcript import connect as openclaw_connect
-from judge.transcript import messages
 
 WINDOW_BEFORE = 20 * 60_000  # the dispatch call precedes the session by seconds; allow slack
 WINDOW_AFTER = 2 * 60_000
 CONTEXT_MESSAGES = 80
 
 
+def dispatch_calls(conn, since_ms: int, until_ms: int):
+    """Every dispatch-looking tool call in the window, newest first: (key, session_id, seq, time, command).
+
+    Matched on the command marker rather than the title: 2026.11 can carry the arguments as a JSON
+    string inside the event, where a title with quotes or non-ASCII text is escaped."""
+    keys = session_keys(conn)
+    rows = conn.execute(
+        "select session_id, seq, created_at, event_json from transcript_events "
+        f"where created_at between ? and ? and {MESSAGE_FILTER} "
+        "and (event_json like '%dispatch%' or event_json like '%opencode run%') order by created_at desc, seq desc",
+        (since_ms, until_ms),
+    ).fetchall()
+    for session_id, seq, created, raw in rows:
+        if session_id not in keys:
+            continue
+        try:
+            role, _, calls = normalize(json.loads(raw))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        for call in calls if role == "assistant" else []:
+            if call["command"]:
+                yield keys[session_id], session_id, seq, created, call["command"]
+
+
 def find_dispatch(title: str, created_ms: int, settings: dict):
     """Return {"session_key", "session_id", "seq", "time", "directory", "directory_raw", "brief", "instruction"} or None."""
     conn = openclaw_connect()
     try:
-        rows = conn.execute(
-            "select w.session_key, t.session_id, t.seq, t.created_at, t.event_json from transcript_events t "
-            "join session_windows w on w.session_id = t.session_id "
-            "where t.created_at between ? and ? and json_extract(t.event_json, '$.message.role') = 'assistant' "
-            "and t.event_json like ? order by t.created_at desc",
-            (created_ms - WINDOW_BEFORE, created_ms + WINDOW_AFTER, f"%{title}%"),
-        ).fetchall()
+        calls = list(dispatch_calls(conn, created_ms - WINDOW_BEFORE, created_ms + WINDOW_AFTER))
     finally:
         conn.close()
-    for key, session_id, seq, created, raw in rows:
+    for key, session_id, seq, created, command in calls:
         if not docket_config.watched(settings, key):
             continue
-        content = (json.loads(raw).get("message") or {}).get("content") or []
-        for part in content if isinstance(content, list) else []:
-            if part.get("type") != "toolCall" or part.get("name") != "exec":
-                continue
-            parsed = dispatches.parse((part.get("arguments") or {}).get("command", ""))
-            if parsed and parsed["title"] == title:
-                return {
-                    "session_key": key,
-                    "session_id": session_id,
-                    "seq": seq,
-                    "time": created,
-                    "directory": parsed["directory"],  # already expanded; checked when it is stored
-                    "directory_raw": parsed["directory_raw"],
-                    "brief": dispatches.read_brief(parsed["directory"], parsed["brief_path"]),
-                    "instruction": parsed["instruction"],
-                }
+        parsed = dispatches.parse(command)
+        if parsed and parsed["title"] == title:
+            return {
+                "session_key": key,
+                "session_id": session_id,
+                "seq": seq,
+                "time": created,
+                "directory": parsed["directory"],  # already expanded; checked when it is stored
+                "directory_raw": parsed["directory_raw"],
+                "brief": dispatches.read_brief(parsed["directory"], parsed["brief_path"]),
+                "instruction": parsed["instruction"],
+            }
     return None
 
 

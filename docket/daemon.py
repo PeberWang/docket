@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from docket import config as docket_config  # noqa: E402
 from docket import dispatches, engines, i18n, ledger, pm, registry  # noqa: E402
 from docket.opencode import Service  # noqa: E402
-from judge import jev, relevance  # noqa: E402
+from judge import jev, relevance, transcript  # noqa: E402
 from judge.transcript import connect as openclaw_connect  # noqa: E402
 from judge.transcript import messages as transcript_messages  # noqa: E402
 
@@ -222,7 +222,7 @@ class Docket:
         """Find the dispatch in the watched chat and let the judge pick the background."""
         dispatch = None
         for _ in range(6):
-            dispatch = registry.find_dispatch(title, ledger.now(), self.settings)
+            dispatch, _unavailable = self.find_dispatch(title, ledger.now())
             if dispatch:
                 break
             time.sleep(5)
@@ -336,6 +336,13 @@ class Docket:
 
     # ---------- registration ----------
 
+    def find_dispatch(self, title: str, created: int):
+        """(dispatch or None, the Unavailable error if the transcript could not be read)."""
+        try:
+            return registry.find_dispatch(title, created, self.settings), None
+        except transcript.Unavailable as error:
+            return None, error
+
     def maybe_register(self, session_id: str, attempts: int = 6):
         db = self.db()
         if ledger.get(db, session_id):
@@ -351,15 +358,20 @@ class Docket:
             return
         name = title[len(prefix.strip()) :].strip()
         created = (session.get("time") or {}).get("created") or ledger.now()
-        dispatch = None
+        dispatch = unavailable = None
         for attempt in range(attempts):  # the transcript write can lag the session by a moment
-            dispatch = registry.find_dispatch(name, created, self.settings)
+            dispatch, unavailable = self.find_dispatch(name, created)
             if dispatch:
                 break
-            time.sleep(5)
+            if attempt + 1 < attempts:
+                time.sleep(5)
         if not dispatch:
-            log.info("not a watched dispatch, skipping: %s", title)
-            ledger.log(db, None, "skipped", {"session": session_id, "title": title})
+            if unavailable:
+                log.warning("cannot check whether %s is a dispatch: %s", title, unavailable)
+                ledger.log(db, None, "skipped", {"session": session_id, "title": title, "reason": "transcript unavailable", "error": str(unavailable)})
+            else:
+                log.info("not a watched dispatch, skipping: %s", title)
+                ledger.log(db, None, "skipped", {"session": session_id, "title": title, "reason": "no matching dispatch in watched sessions"})
             return
         try:
             context = registry.build_context(dispatch, name, self.settings)
@@ -722,19 +734,31 @@ class Docket:
             try:
                 if self.settings["attribute"] and self.judging:
                     self.scan_mentions(db)
+                    self.transcript_state(None)
+            except transcript.Unavailable as error:
+                self.transcript_state(error)
             except Exception:
                 log.exception("mention scan failed")
             time.sleep(MENTION_POLL)
+
+    def transcript_state(self, error):
+        """One readable line when the transcript database goes away or comes back, never a stack every poll."""
+        reason = str(error) if error else None
+        if reason == getattr(self, "transcript_fault", None):
+            return
+        if reason:
+            log.warning("%s; mentions and new dispatches wait until it opens again (run scripts/selfcheck.py)", reason)
+            ledger.log(self.db(), None, "transcript:unavailable", {"path": str(error.path), "source": error.source, "error": str(error.error)})
+        elif getattr(self, "transcript_fault", None):
+            log.info("the OpenClaw transcript database opens again")
+        self.transcript_fault = reason
 
     def scan_mentions(self, db):
         live = [dict(r) for r in db.execute(f"select * from delegations where state in {LIVE}").fetchall()]
         conn = openclaw_connect()
         try:
-            sessions = [
-                (key, sid)
-                for key, sid in conn.execute("select session_key, session_id from session_windows").fetchall()
-                if docket_config.watched(self.settings, key)
-            ]
+            # One entry per session: its heartbeat window is the same conversation, not another one.
+            sessions = [(key, sid) for sid, key in transcript.session_keys(conn).items() if docket_config.watched(self.settings, key)]
             for key, session_id in sessions:
                 cursor_key = f"cursor:{session_id}"
                 stored = db.execute("select value from kv where key = ?", (cursor_key,)).fetchone()
@@ -745,19 +769,13 @@ class Docket:
                 since_seq = int(stored[0])
                 if latest <= since_seq:
                     continue
-                rows = conn.execute(
-                    "select seq from transcript_events where session_id = ? and seq > ? and json_extract(event_json, '$.message.role') = 'user'",
-                    (session_id, since_seq),
-                ).fetchall()
                 db.execute("insert or replace into kv values (?, ?)", (cursor_key, str(latest)))
-                if not rows or not live:
+                if not live:
                     continue
                 history = transcript_messages(conn, session_id, since=ledger.now() - 86400_000)
-                by_seq = {m.seq: m for m in history}
-                for (seq,) in rows:
-                    message = by_seq.get(seq)
-                    if message and message.role == "user":
-                        self.attribute(message, [m for m in history if m.seq < seq][-3:], live)
+                for index, message in enumerate(history):
+                    if message.seq > since_seq and message.seq <= latest and message.role == "user":
+                        self.attribute(message, history[max(0, index - 3) : index], live)
         finally:
             conn.close()
 

@@ -123,7 +123,7 @@ Nobody is there to approve prompts during a run. OpenCode gets `--auto` when `de
 
 Early, and used daily by its author with OpenCode. Known limits:
 
-- macOS only. The transcript reader targets OpenClaw 2026.9.x.
+- macOS only. The transcript reader reads OpenClaw 2026.9.x and 2026.11.x; it finds the agent database through `agent_databases` in `~/.openclaw/state/openclaw.sqlite`, falling back to the 2026.9 path. After upgrading OpenClaw, run `/usr/bin/python3 -I scripts/selfcheck.py`: its first line names the database it reads, whether the main session reads, and what became of the latest dispatch.
 - The Claude Code path is tested end to end; the Codex path follows the official CLI docs but has not been run yet. Reports welcome.
 - The round limit is fixed at 3. The panel docks to the main screen.
 

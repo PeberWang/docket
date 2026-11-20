@@ -97,7 +97,7 @@ def main():
         if message.role != "assistant" or message.time < since:
             continue
         for call in message.tool_calls:
-            command = call["arguments"].get("command") if call["name"] == "exec" else None
+            command = call["command"]  # normalised by judge.transcript for both event shapes
             parsed = parse_dispatch(command) if command else None
             if not parsed:
                 continue
