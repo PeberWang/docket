@@ -331,6 +331,18 @@ defaults delete io.github.peberwang.docket permissionSettingsPaths   # 回到缺
 
 走现有 `act()`，因此失败时照常出带「重试」的故障卡，重试参数里带着 `via=handback`。
 
+**2026-11-22 补两条硬规矩**（BRIEF_docket_handback_followups.md）：上线当晚 PM 把「做完就结案」当默认，直接结了案，还替用户定了任务书留给用户的 sources 分层。现在提示词里删掉了「做完就结案」，改成：
+
+1. 不许自己结案：上一段做完了就出 report 卡问「接着做 X，还是收工」，用户说收工才结。
+2. 保留事项必须出卡：任务书里带「待用户决定 / 留给你定 / 需要确认」等标记的行原样摘进提示词（`pm.reserved_items()`），并附任务书前 4000 字；PM 动手前要在回复的 `checklist` 里逐条写「照做」或「出卡问」，记进 `pm:checklist` 事件。
+
+两条都在代码里校验（`pm.validate_handback()`，由 `act(via="handback")` 选用）：轮次没用完时 close 会被打回重答；任务书有保留事项而 checklist 为空也会被打回。轮次用完时只剩 close 这一条路，所以照样放行。
+
+## 重启对账与面板排序（2026-11-22）
+
+- `reconcile()` 先跑 `close_overdue()`：`updated_at` 超过 `reconcile_max_age_hours`（config.json，默认 6）的 pending 不再唤醒 PM，记一条 `orphaned` 事件（含 dispatched_at、updated_at、hours），然后经 `finish()` 结案，结案卡写明停了几小时、按超期结案、需要可以重新派。走 `finish()` 意味着 OpenClaw 当天的记忆里也会记一条，主线程能知道。running 不受影响，照旧按会话状态恢复。
+- `snapshot()` 排序：awaiting/limit、pending、running 保持原来的优先级；taken_over 与 closed 合成一组，按 `updated_at` 倒序混排。`updated_at` 的含义没动。
+
 ## 与任务书的出入
 
 1. **daemon 里六处 `state in ('closed','taken_over')` 没改成只排除 closed。** 这些检查看的是当前状态，不是历史：交还后状态是 pending/running/awaiting，六处本来就放行，单测里交还后的 run 结束、答卡、limit、sweep 都按正常卡处理。反过来若改成只排除 closed，仍在接管中的卡就会被 `on_run_end`、权限请求重新出卡，和任务书自己要的「taken_over 仍然不接新请示」相反。

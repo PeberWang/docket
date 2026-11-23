@@ -11,7 +11,8 @@
   "engine": "opencode",         // default coding agent for desk-dispatch: opencode | claude | codex
   "pm_model": null,             // model for PM sessions (openclaw agent --model); null = OpenClaw's default
   "pm_fallback_model": null,    // third try when the PM's reply failed validation twice; null = pm_model again
-  "fallback_model": "deepseek/deepseek-flash"  // coding agent retries once with this when a run hits its usage limit
+  "fallback_model": "deepseek/deepseek-flash", // coding agent retries once with this when a run hits its usage limit
+  "reconcile_max_age_hours": 6  // on restart a pending handoff idle longer than this is closed as overdue, not woken
 }
 """
 
@@ -24,7 +25,7 @@ from docket.ledger import HOME
 from judge.transcript import canonical_key
 
 PATH = HOME / "config.json"
-DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "🦞 ", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": "deepseek/deepseek-flash"}
+DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "🦞 ", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": "deepseek/deepseek-flash", "reconcile_max_age_hours": 6}
 
 
 def load() -> dict:

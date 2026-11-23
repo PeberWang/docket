@@ -554,6 +554,93 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.sent, [])
         self.assertEqual(self.state(), "taken_over")
 
+    def test_handback_wake_forbids_closing_and_deciding_reserved_items(self):
+        brief = "# 任务\n1. 改排序\n2. sources 分层：留给你定\n3. 跑测试"
+        message = pm.handback_wake("done", 1, brief)
+        self.assertIn("Do not close on your own", message)
+        self.assertIn("Only close when the user has said to wrap up", message)
+        self.assertIn("stop and put it on a card. Do not decide it for the user", message)
+        self.assertIn("- 2. sources 分层：留给你定", message)
+        self.assertIn("照做", message)
+        self.assertIn("出卡问", message)
+        self.assertEqual(pm.reserved_items(brief), ["2. sources 分层：留给你定"])
+        validate = pm.validate_handback(1, brief)
+        self.assertTrue(validate({"action": "close", "conclusion": "done", "checklist": ["x → 出卡问"]}))
+        self.assertTrue(validate(dict({"action": "card", "card": CARD})))  # reserved items need a checklist
+        self.assertEqual(validate({"action": "card", "card": CARD, "checklist": ["sources 分层 → 出卡问"]}), [])
+        # With the budget spent a close is the only way out, so it stays allowed.
+        self.assertEqual(pm.validate_handback(3, None)({"action": "close", "conclusion": "done"}), [])
+
+    def test_a_handback_close_is_retried_as_a_card(self):
+        self.db.execute("update delegations set brief = '2. sources 分层：待用户决定' where id = 'ses_x'")
+        self.take_over()
+        replies = [{"action": "close", "conclusion": "all done"},
+                   {"action": "card", "card": dict(CARD, progress="this piece is done; go on or wrap up?"), "checklist": ["sources 分层 → 出卡问"]}]
+
+        def ask(key, message, validate, record=None):  # the real loop's shape: first passing reply wins
+            for reply in replies:
+                if not validate(reply):
+                    return reply
+            raise AssertionError("no reply passed")
+
+        pm.ask = ask
+        self.docket.handback("ses_x")
+        self.assertEqual(self.state(), "awaiting")
+        self.assertIn("go on or wrap up", json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"])
+        event = self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'pm:checklist'").fetchone()
+        self.assertEqual(json.loads(event[0])["items"], ["sources 分层 → 出卡问"])
+
+    # ---------- the panel's order ----------
+
+    def test_ended_handoffs_mix_by_time(self):
+        for sid, state, age in (("ses_a", "taken_over", 3), ("ses_b", "closed", 1), ("ses_c", "closed", 2)):
+            ledger.add_delegation(self.db, id=sid, title=sid, directory=None, source_key="k", dispatch_seq=1, dispatched_at=0, brief="", context=[])
+            self.db.execute("update delegations set state = ?, updated_at = ? where id = ?", (state, ledger.now() - age * 3600_000, sid))
+        order = [d["id"] for d in ledger.snapshot(self.db)]
+        self.assertEqual(order, ["ses_x", "ses_b", "ses_c", "ses_a"])  # the live one first, then newest ended first
+
+    # ---------- reconcile after a restart ----------
+
+    def reconcile_with(self, sessions: dict):
+        class Service:
+            def recent_sessions(self, limit=40):
+                return []
+
+            def session(self, sid):
+                return sessions[sid]
+
+        daemon.Service = Service
+        daemon.MEMORY_DIR = Path(tempfile.mkdtemp())
+        self.docket.reconcile()
+
+    def test_reconcile_wakes_a_recent_pending(self):
+        ledger.set_state(self.db, "ses_x", "pending")
+        self.answers.append(dict(CARD, progress="picked up"))
+        self.reconcile_with({"ses_x": {"time": {"busy": 1, "idle": 2}, "outcome": "succeeded"}})
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "picked up")
+
+    def test_reconcile_closes_an_overdue_pending(self):
+        ledger.set_state(self.db, "ses_x", "pending")
+        old = ledger.now() - 48 * 3600_000
+        self.db.execute("update delegations set updated_at = ?, dispatched_at = ? where id = 'ses_x'", (old, old - 1000))
+        self.reconcile_with({"ses_x": {"time": {"busy": 1, "idle": 2}, "outcome": "succeeded"}})
+        self.assertEqual(self.state(), "closed")
+        self.assertEqual(self.answers, [])  # the PM was never woken
+        card = self.db.execute("select * from cards where delegation_id = 'ses_x' order by id desc limit 1").fetchone()
+        self.assertEqual(card["kind"], "closed")
+        self.assertIn("48", json.loads(card["body"])["conclusion"])
+        event = json.loads(self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'orphaned'").fetchone()[0])
+        self.assertEqual((event["dispatched_at"], event["updated_at"], event["hours"]), (old - 1000, old, 48))
+
+    def test_reconcile_still_resumes_an_old_running(self):
+        self.db.execute("update delegations set updated_at = ? where id = 'ses_x'", (ledger.now() - 48 * 3600_000,))
+        self.assertEqual(self.state(), "running")
+        self.answers.append(dict(CARD, progress="finished while down"))
+        self.reconcile_with({"ses_x": {"time": {"busy": 1, "idle": ledger.now()}, "outcome": "succeeded"}})
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "finished while down")
+
     def test_home_variable_in_dispatch_directory_is_stored_expanded(self):
         home = Path(tempfile.mkdtemp()).resolve()
         (home / "Desktop/Code工作区/proj").mkdir(parents=True)

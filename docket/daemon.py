@@ -570,8 +570,12 @@ class Docket:
         `via` tags the relay that follows ("handback"), see relayed_count.
         """
         row = self.delegation(delegation_id)
-        action = self.ask_pm(row, message, pm.validate_action)
+        # A handback wake may not close on its own nor skip the brief's reserved items (see pm.handback_wake).
+        validate = pm.validate_handback(row["rounds"], row["brief"]) if via == "handback" else pm.validate_action
+        action = self.ask_pm(row, message, validate)
         kind = action["action"]
+        if action.get("checklist") is not None:
+            ledger.log(self.db(), delegation_id, "pm:checklist", {"via": via, "items": action["checklist"]})
         now = self.delegation(delegation_id)["state"]
         if now in ("closed", "taken_over"):  # taken over (again) or closed while the PM was thinking
             ledger.log(self.db(), delegation_id, "pm:dropped", {"action": kind, "state": now})
@@ -749,7 +753,7 @@ class Docket:
         if state is None:
             raise ValueError(self.t("err_not_taken_over"))
         log.info("handed back %s (%s)", delegation_id, state)
-        message = pm.handback_wake(self.latest_reply(row), row["rounds"])
+        message = pm.handback_wake(self.latest_reply(row), row["rounds"], row["brief"])
         self.submit(delegation_id, self.act, delegation_id, message, None, "handback")
         return state
 
@@ -1008,6 +1012,7 @@ class Docket:
             "where c.resolved_at is null and d.state = 'closed' and c.kind != 'closed'"
         ).fetchall():
             ledger.resolve_card(self.db(), card["id"], {"action": "closed"})
+        self.close_overdue()
         installed = int(self.db().execute("select value from kv where key = 'installed_at'").fetchone()[0])
         try:
             service = Service()
@@ -1036,6 +1041,20 @@ class Docket:
                     ledger.set_state(self.db(), row["id"], "running")
             elif session.get("outcome") and (row["state"] == "pending" or (times.get("idle") or 0) > row["updated_at"]):
                 self.on_run_end(row["id"], session["outcome"])
+
+    def close_overdue(self):
+        """A pending handoff left far longer than any PM job takes was not cut off by this
+        restart: its work most likely went on without the docket. It is closed with a note,
+        never woken. Running ones are left to reconcile, since a process may still be at it."""
+        db = self.db()
+        cutoff = ledger.now() - float(self.settings["reconcile_max_age_hours"]) * 3600_000
+        for row in db.execute(
+            "select * from delegations where state = 'pending' and engine = 'opencode' and updated_at < ?", (cutoff,)
+        ).fetchall():
+            hours = (ledger.now() - row["updated_at"]) // 3600_000
+            ledger.log(db, row["id"], "orphaned", {"dispatched_at": row["dispatched_at"], "updated_at": row["updated_at"], "hours": hours})
+            log.info("reconcile: closing %s, pending for %d hours", row["id"], hours)
+            self.finish(row["id"], self.t("closed_overdue", hours=hours))
 
 
 # ---------- HTTP API for Docket.app ----------

@@ -165,24 +165,67 @@ def mention_wake(text: str, rounds: int) -> str:
     )
 
 
-def handback_wake(opencode_reply: str, rounds: int) -> str:
-    """The user took the handoff over and has handed it back. Short on purpose: the plan is the PM's."""
+# How a task brief marks what it leaves to the user. A line carrying one is a reserved item.
+RESERVED_MARKERS = ("待用户决定", "留给你定", "需要确认", "待确认", "由用户决定", "用户来定", "你来定",
+                    "for the user to decide", "user decides", "your call", "needs confirmation", "to be confirmed")
+
+
+def reserved_items(brief: str | None) -> list[str]:
+    """The lines of a task brief that leave a call to the user, verbatim."""
+    return [line.strip() for line in (brief or "").splitlines() if any(m in line for m in RESERVED_MARKERS)]
+
+
+def handback_wake(opencode_reply: str, rounds: int, brief: str | None = None) -> str:
+    """The user took the handoff over and has handed it back. The plan is the PM's, within two
+    hard rules: no closing on its own, and no deciding what the brief left to the user."""
     reply = (opencode_reply or "").strip()
     if len(reply) > OPENCODE_CHARS:
         reply = reply[:OPENCODE_CHARS] + "\n… (truncated)"
-    return "\n".join(
-        [
-            "The user took this handoff over in OpenCode for a while and has now handed it back to you on Docket. Handing back cost no round.",
-            "Carry on at your own pace: check where the work stands (they may have changed things), then relay the next piece to OpenCode, split long work into pieces you can verify, card only what you cannot decide, close if it is done.",
-            budget_line(rounds),
-            "",
-            f"OpenCode's last reply:\n{reply or '(no text)'}",
-            "",
-            language_line(),
-            "",
-            action_format(),
-        ]
-    )
+    lines = [
+        "The user took this handoff over in OpenCode for a while and has now handed it back to you on Docket. Handing back cost no round.",
+        "Carry on at your own pace: check where the work stands (they may have changed things), then relay the next piece to OpenCode, split long work into pieces you can verify, card only what you cannot decide.",
+        "",
+        "Two hard rules for this wake. They are not suggestions:",
+        "1. Do not close on your own. If the last piece is done, stop and write a card (kind=report) that says this piece is done and asks: go on with the next piece (name it), or wrap up. Only close when the user has said to wrap up.",
+        "2. Do not decide reserved items. An item the task brief leaves to the user (marked 待用户决定, 留给你定, 需要确认 or the like) is the user's call: when you reach one, stop and put it on a card. Do not decide it for the user, not even when the answer looks obvious.",
+        "Before you act, go through the reserved items one by one and put the list in your reply as \"checklist\": one line per item, the item, then \"照做\" if the brief already settles it and you can just do it, or \"出卡问\" if it is the user's call. Any \"出卡问\" item goes on your card instead of into a relay.",
+    ]
+    items = reserved_items(brief)
+    if items:
+        lines += ["", "### Reserved items in the task brief (verbatim)"] + [f"- {item}" for item in items]
+    if brief:
+        lines += ["", "### Task brief (excerpt)", brief[:4000]]
+    lines += [
+        "",
+        budget_line(rounds),
+        "",
+        f"OpenCode's last reply:\n{reply or '(no text)'}",
+        "",
+        language_line(),
+        "",
+        action_format(),
+        'Add "checklist": ["item → 照做 or 出卡问", …] to the action (an empty list if the brief reserves nothing).',
+    ]
+    return "\n".join(lines)
+
+
+def validate_handback(rounds: int, brief: str | None = None):
+    """The handback wake's rules, checked in code: no close while the user still has rounds
+    (with the budget spent only a close is left), and the checklist when the brief reserves items."""
+    def validate(action) -> list[str]:
+        errors = validate_action(action)
+        if errors:
+            return errors
+        if action.get("action") == "close" and rounds < ROUND_LIMIT:
+            errors.append("after a handback you may not close on your own: write a card (kind=report) asking whether to go on or wrap up")
+        checklist = action.get("checklist")
+        if checklist is not None and (not isinstance(checklist, list) or any(not isinstance(c, str) for c in checklist)):
+            errors.append("checklist must be a list of strings")
+        elif reserved_items(brief) and not checklist:
+            errors.append("the brief reserves items for the user: list each in checklist with 照做 or 出卡问")
+        return errors
+
+    return validate
 
 
 def wrap_up_wake(event: str, opencode_reply: str | None, rounds: int) -> str:

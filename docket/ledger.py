@@ -269,12 +269,14 @@ def active(conn) -> list:
 def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dict]:
     """Everything the panel shows: open delegations plus ones closed in the last day.
     A taken-over one stays for a week so it can still be handed back; older ones would
-    only crowd the panel (hand_back works on them all the same, e.g. from scripts/handback.py)."""
+    only crowd the panel (hand_back works on them all the same, e.g. from scripts/handback.py).
+    Live ones come first, by what needs a hand; the ended ones (taken over, closed) follow as
+    one group, newest first, whatever their state."""
     since = now() - closed_hours * 3600_000
     rows = conn.execute(
         "select * from delegations where state not in ('closed', 'taken_over')"
         " or (state = 'taken_over' and updated_at >= ?) or updated_at >= ? order by "
-        "case state when 'awaiting' then 0 when 'limit' then 0 when 'pending' then 1 when 'running' then 2 when 'taken_over' then 3 else 4 end, updated_at desc",
+        "case state when 'awaiting' then 0 when 'limit' then 0 when 'pending' then 1 when 'running' then 2 else 3 end, updated_at desc",
         (now() - taken_over_days * 86400_000, since),
     ).fetchall()
     out = []
