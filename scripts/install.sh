@@ -104,9 +104,9 @@ OpenClaw Docket is running: the tray icon is in the menu bar, the pill on the ri
 Next:
   1. Tell OpenClaw to hand off through Docket. Add to ~/.openclaw/workspace/AGENTS.md:
        Hand coding work off with the desk-dispatch skill, reply with one line, and leave the rest to Docket.
-  2. Optional, the judge: put a TypeSafe key (https://console.typesafe.ai) in TYPESAFE_API_KEY
-     or at "typesafe": {"api_key": "..."} in ~/.openclaw/workspace/secrets.json, then
-       launchctl kickstart -k $DOMAIN/$LABEL
+  2. Optional, the judge (picks a card's background from the chat). Without it cards still arrive.
+     Open Settings → Models and either save a TypeSafe key (https://console.typesafe.ai), or switch
+     the backend to an OpenAI-compatible language model and fill in its endpoint, model and key.
   3. For OpenCode: install the opencode-openclaw-inbox plugin (0.4.0 or later), which provides
      opencode-dispatch and opens sessions for Docket.
 

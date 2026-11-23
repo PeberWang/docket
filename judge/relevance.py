@@ -1,6 +1,7 @@
 """The judge: which earlier messages belong to a delegation, and where a new message belongs.
 
-Both are Jev questions; the thresholds and the stitching stay in code.
+Both are System One questions, answered by whichever judge backend is configured
+(judge/backend.py); the thresholds and the stitching stay in code.
 
 - `context_scores`: at dispatch time, one Noul per earlier message ("is this part of
   the task's context?"). The messages above the threshold, verbatim, become the card's
@@ -12,7 +13,7 @@ Both are Jev questions; the thresholds and the stitching stay in code.
 
 from __future__ import annotations
 
-from judge import jev
+from judge import backend
 from judge.redact import redact
 
 # Jev's default limits are 64k tokens per request and 32k per question. Chinese runs
@@ -85,7 +86,7 @@ def context_scores(task: dict, messages: list[dict]) -> tuple[dict[str, float], 
             }
             for row in chunk
         }
-        result = jev.ask(state, questions)
+        result = backend.ask(state, questions)
         usage["input_tokens"] += result.get("usage", {}).get("input_tokens", 0)
         usage["requests"] += 1
         for key, answer in result["answers"].items():
@@ -155,7 +156,7 @@ def attribute(message: dict, recent: list[dict], active: list[dict]) -> tuple[di
             },
         },
     }
-    result = jev.ask(state, questions)
+    result = backend.ask(state, questions)
     answers = result["answers"]
     which = answers["which"]
     choice = which.get("choice")

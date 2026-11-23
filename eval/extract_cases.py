@@ -15,14 +15,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from docket import dispatches  # noqa: E402
+from docket import config, dispatches  # noqa: E402
 from judge.redact import redact  # noqa: E402
 from judge.transcript import connect, messages, session_id_for  # noqa: E402
 
@@ -32,6 +31,7 @@ AFTER_HOURS = 36
 MAX_MESSAGES = 150
 MAX_CHARS = 1500
 MAX_BRIEF = 4000
+PREFIX = config.load()["prefix"]  # the session-title prefix, as config.json sets it
 
 
 def clip(text: str, limit: int) -> str:
@@ -39,7 +39,7 @@ def clip(text: str, limit: int) -> str:
 
 
 def parse_dispatch(command: str):
-    parsed = dispatches.parse(command)
+    parsed = dispatches.parse(command, PREFIX)
     return (parsed["title"], parsed["directory"], parsed["brief_path"], parsed["instruction"]) if parsed else None
 
 
@@ -55,7 +55,7 @@ def opencode_rounds(title: str) -> list:
     import sqlite3
 
     conn = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True)
-    row = conn.execute("select id from session_v2 where title = ? and parent_id is null order by time_created limit 1", (f"🦞 {title}",)).fetchone()
+    row = conn.execute("select id from session_v2 where title = ? and parent_id is null order by time_created limit 1", (f"{PREFIX}{title}" if PREFIX.strip() else title,)).fetchone()
     if not row:
         return []
     rounds = []
@@ -102,7 +102,6 @@ def main():
             if not parsed:
                 continue
             title, directory, brief, instruction = parsed
-            title = re.sub(r"^🦞\s*", "", title)
             if title in seen:
                 continue
             seen.add(title)

@@ -23,10 +23,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from docket import config, daemon, ledger, registry  # noqa: E402
-from judge import transcript  # noqa: E402
+from judge import backend, transcript  # noqa: E402
 
 MAIN = "221272f9-9411-4c57-8ce8-a4a6bbadf870"
-SMOKE = 'cd "$HOME/proj" && desk-dispatch --detach --title "🦞 冒烟：更新后派发链路" -f BRIEF.md "跑一遍"'
+SMOKE = 'cd "$HOME/proj" && desk-dispatch --detach --title "冒烟：更新后派发链路" -f BRIEF.md "跑一遍"'
 T0 = 1_763_500_000_000
 
 
@@ -215,12 +215,22 @@ class Daemon(unittest.TestCase):
     def test_new_dispatch_registers(self):
         class Session:
             def session(self, sid):
-                return {"title": "🦞 冒烟：更新后派发链路", "time": {"created": T0}}
+                return {"title": "冒烟：更新后派发链路", "time": {"created": T0}}
 
         with mock.patch.object(daemon, "Service", Session), mock.patch.object(daemon.registry, "build_context", lambda *a: []):
             self.docket.maybe_register("ses_e08e87462ffeKMGprek88OIEUQ", attempts=1)
         row = self.docket.delegation("ses_e08e87462ffeKMGprek88OIEUQ")
         self.assertEqual((row["source_key"], row["dispatch_seq"], row["state"]), ("agent:main:main", 27188, "running"))
+
+    def test_a_session_with_the_inbox_marker_registers_under_the_dispatch_title(self):
+        class Session:
+            def session(self, sid):
+                return {"title": "\U0001F99E 冒烟：更新后派发链路", "time": {"created": T0}}  # opencode-dispatch adds the marker
+
+        with mock.patch.object(daemon, "Service", Session), mock.patch.object(daemon.registry, "build_context", lambda *a: []):
+            self.docket.maybe_register("ses_marker", attempts=1)
+        row = self.docket.delegation("ses_marker")
+        self.assertEqual((row["title"], row["dispatch_seq"]), ("冒烟：更新后派发链路", 27188))
 
     def test_mentions_read_custom_user_events_once_per_session(self):
         db = self.docket.db()
@@ -233,7 +243,9 @@ class Daemon(unittest.TestCase):
         self.assertEqual(seen, ["冒烟那个怎么样了"])
 
     def test_an_unopenable_database_is_one_readable_warning(self):
-        self.docket.settings["attribute"], self.docket.judging = True, True
+        self.docket.settings["attribute"] = True
+        mock.patch.object(backend, "available", lambda: True).start()
+        self.addCleanup(mock.patch.stopall)
         os.environ["DOCKET_OPENCLAW_DB"] = str(self.root / "missing.sqlite")
         polls = []
 
@@ -252,7 +264,7 @@ class Daemon(unittest.TestCase):
     def test_registration_says_why_when_the_database_is_unreadable(self):
         class Session:
             def session(self, sid):
-                return {"title": "🦞 冒烟：更新后派发链路", "time": {"created": T0}}
+                return {"title": "冒烟：更新后派发链路", "time": {"created": T0}}
 
         os.environ["DOCKET_OPENCLAW_DB"] = str(self.root / "missing.sqlite")
         with mock.patch.object(daemon, "Service", Session), mock.patch.object(transcript, "RETRY_DELAY", 0):

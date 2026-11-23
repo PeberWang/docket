@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from docket import config as docket_config  # noqa: E402
 from docket import dispatches, engines, i18n, ledger, pm, registry  # noqa: E402
 from docket.opencode import Service  # noqa: E402
-from judge import jev, relevance, transcript  # noqa: E402
+from judge import backend, relevance, transcript  # noqa: E402
 from judge.transcript import connect as openclaw_connect  # noqa: E402
 from judge.transcript import messages as transcript_messages  # noqa: E402
 
@@ -47,23 +47,64 @@ log = logging.getLogger("docket")
 
 class Docket:
     def __init__(self):
+        self.settings_mtime = docket_config.mtime()
         self.settings = docket_config.load()
         self.locale = i18n.resolve(self.settings.get("locale"))
         self.t = i18n.Strings(self.locale)
-        self.judging = jev.available()
-        if not self.judging:
-            log.warning("no TypeSafe key: the judge is off (no background picking, no main-thread attribution)")
+        backend.configure(self.settings.get("judge"))
+        missing = backend.current.missing()
+        if missing:
+            log.warning("judge off (%s for %s): no background picking, no main-thread attribution", missing, backend.current.settings["backend"])
         self.local = threading.local()
         self.workers = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pm")
         self.locks: dict[str, threading.Lock] = {}
         self.locks_guard = threading.Lock()
         self.jobs: dict[str, int] = {}  # PM jobs submitted and not yet finished, per handoff
         pm.configure(self.locale, self.settings.get("pm_model"), self.settings.get("pm_fallback_model"))
+        self.settings_guard = threading.Lock()
         db = self.db()
         if not db.execute("select value from kv where key = 'installed_at'").fetchone():
             db.execute("insert into kv values ('installed_at', ?)", (str(ledger.now()),))
 
     # ---------- plumbing ----------
+
+    @property
+    def judging(self) -> bool:
+        return backend.available()
+
+    def reload_settings(self, force: bool = False) -> bool:
+        """Pick up config.json when it changed: the PM's models and the judge apply from the next call.
+
+        The locale stays what it was at start (the panel and the PM prompts follow it).
+        """
+        with self.settings_guard:
+            stamp = docket_config.mtime()
+            if not force and stamp == self.settings_mtime:
+                return False
+            self.settings_mtime = stamp
+            settings = docket_config.load()
+            pm.configure(self.locale, settings.get("pm_model"), settings.get("pm_fallback_model"))
+            backend.configure(settings.get("judge"))
+            self.settings = settings
+        judge = backend.current.settings
+        log.info("settings reloaded: pm_model=%s judge=%s/%s", settings.get("pm_model") or "default", judge["backend"], judge["model"] or "-")
+        return True
+
+    def settings_view(self) -> dict:
+        """What the settings window shows: never a key, only whether one is there and where from."""
+        return {
+            "pm_model": self.settings.get("pm_model"),
+            "pm_fallback_model": self.settings.get("pm_fallback_model"),
+            "judge": backend.current.status(),
+            # As written in config.json, so the window shows defaults as placeholders rather than saving them.
+            "judge_config": self.settings.get("judge") or {},
+            "applies": "next_poll",
+        }
+
+    def save_settings(self, changes: dict) -> dict:
+        docket_config.save(changes)
+        self.reload_settings(force=True)
+        return self.settings_view()
 
     def db(self):
         if not hasattr(self.local, "conn"):
@@ -356,7 +397,7 @@ class Docket:
         prefix = self.settings["prefix"]
         if not title.startswith(prefix.strip()):
             return
-        name = title[len(prefix.strip()) :].strip()
+        name = dispatches.strip_prefix(title, prefix)
         created = (session.get("time") or {}).get("created") or ledger.now()
         dispatch = unavailable = None
         for attempt in range(attempts):  # the transcript write can lag the session by a moment
@@ -373,6 +414,7 @@ class Docket:
                 log.info("not a watched dispatch, skipping: %s", title)
                 ledger.log(db, None, "skipped", {"session": session_id, "title": title, "reason": "no matching dispatch in watched sessions"})
             return
+        name = dispatch.get("title") or name  # the dispatch's own title, without a dispatcher's marker
         try:
             context = registry.build_context(dispatch, name, self.settings)
         except Exception as error:
@@ -775,6 +817,7 @@ class Docket:
         db = self.db()
         while True:
             try:
+                self.reload_settings()
                 if self.settings["attribute"] and self.judging:
                     self.scan_mentions(db)
                     self.transcript_state(None)
@@ -1090,6 +1133,9 @@ def serve(docket: Docket):
             if self.path == "/api/state":
                 items = ledger.snapshot(docket.db())
                 return self.reply(200, {"locale": docket.locale, "awaiting": sum(1 for d in items if d["state"] == "awaiting"), "delegations": items})
+            if self.path == "/api/settings":
+                docket.reload_settings()
+                return self.reply(200, docket.settings_view())
             self.reply(404, {"error": "not found"})
 
         def do_POST(self):
@@ -1098,6 +1144,8 @@ def serve(docket: Docket):
             parts = self.path.strip("/").split("/")
             try:
                 body = self.body()
+                if parts == ["api", "settings"]:
+                    return self.reply(200, docket.save_settings(body))
                 if parts == ["api", "dispatch"]:
                     title = (body.get("title") or "").strip()
                     if not title or not (body.get("instruction") or body.get("brief")):

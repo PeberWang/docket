@@ -1,4 +1,4 @@
-"""Turn a new 🦞 OpenCode session into a docket delegation.
+"""Turn a new dispatched OpenCode session into a docket delegation.
 
 The session tells us the title and the time. The dispatch itself is found in the
 OpenClaw transcripts (only watched sessions), and the judge picks the background.
@@ -11,7 +11,7 @@ import json
 
 from docket import config as docket_config
 from docket import dispatches
-from judge import jev, relevance
+from judge import backend, relevance
 from judge.transcript import MESSAGE_FILTER, messages, normalize, session_keys
 from judge.transcript import connect as openclaw_connect
 
@@ -45,7 +45,7 @@ def dispatch_calls(conn, since_ms: int, until_ms: int):
 
 
 def find_dispatch(title: str, created_ms: int, settings: dict):
-    """Return {"session_key", "session_id", "seq", "time", "directory", "directory_raw", "brief", "instruction"} or None."""
+    """Return {"title", "session_key", "session_id", "seq", "time", "directory", "directory_raw", "brief", "instruction"} or None."""
     conn = openclaw_connect()
     try:
         calls = list(dispatch_calls(conn, created_ms - WINDOW_BEFORE, created_ms + WINDOW_AFTER))
@@ -54,9 +54,10 @@ def find_dispatch(title: str, created_ms: int, settings: dict):
     for key, session_id, seq, created, command in calls:
         if not docket_config.watched(settings, key):
             continue
-        parsed = dispatches.parse(command)
-        if parsed and parsed["title"] == title:
+        parsed = dispatches.parse(command, settings.get("prefix", ""))
+        if parsed and dispatches.same_task(title, parsed["title"], settings.get("prefix", "")):
             return {
+                "title": parsed["title"],
                 "session_key": key,
                 "session_id": session_id,
                 "seq": seq,
@@ -85,7 +86,7 @@ def build_context(dispatch: dict, title: str, settings: dict) -> list[dict]:
     finally:
         conn.close()
     rows = _rows(history[-CONTEXT_MESSAGES:])
-    if not rows or not jev.available():
+    if not rows or not backend.available():
         return []
     task = {"title": title, "instruction": dispatch["instruction"], "brief": dispatch["brief"]}
     scores, _ = relevance.context_scores(task, rows)

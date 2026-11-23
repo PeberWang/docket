@@ -187,8 +187,8 @@ def handback_wake(opencode_reply: str, rounds: int, brief: str | None = None) ->
         "",
         "Two hard rules for this wake. They are not suggestions:",
         "1. Do not close on your own. If the last piece is done, stop and write a card (kind=report) that says this piece is done and asks: go on with the next piece (name it), or wrap up. Only close when the user has said to wrap up.",
-        "2. Do not decide reserved items. An item the task brief leaves to the user (marked 待用户决定, 留给你定, 需要确认 or the like) is the user's call: when you reach one, stop and put it on a card. Do not decide it for the user, not even when the answer looks obvious.",
-        "Before you act, go through the reserved items one by one and put the list in your reply as \"checklist\": one line per item, the item, then \"照做\" if the brief already settles it and you can just do it, or \"出卡问\" if it is the user's call. Any \"出卡问\" item goes on your card instead of into a relay.",
+        "2. Do not decide reserved items. An item the task brief leaves to the user (a line marking it as the user's decision, as needing confirmation, or the like) is the user's call: when you reach one, stop and put it on a card. Do not decide it for the user, not even when the answer looks obvious.",
+        "Before you act, go through the reserved items one by one and put the list in your reply as \"checklist\": one line per item, the item, then \"do\" if the brief already settles it and you can just do it, or \"ask the user\" if it is the user's call. Any \"ask the user\" item goes on your card instead of into a relay.",
     ]
     items = reserved_items(brief)
     if items:
@@ -204,7 +204,7 @@ def handback_wake(opencode_reply: str, rounds: int, brief: str | None = None) ->
         language_line(),
         "",
         action_format(),
-        'Add "checklist": ["item → 照做 or 出卡问", …] to the action (an empty list if the brief reserves nothing).',
+        'Add "checklist": ["item → do" or "item → ask the user", …] to the action (an empty list if the brief reserves nothing).',
     ]
     return "\n".join(lines)
 
@@ -222,7 +222,7 @@ def validate_handback(rounds: int, brief: str | None = None):
         if checklist is not None and (not isinstance(checklist, list) or any(not isinstance(c, str) for c in checklist)):
             errors.append("checklist must be a list of strings")
         elif reserved_items(brief) and not checklist:
-            errors.append("the brief reserves items for the user: list each in checklist with 照做 or 出卡问")
+            errors.append('the brief reserves items for the user: list each in checklist with "do" or "ask the user"')
         return errors
 
     return validate

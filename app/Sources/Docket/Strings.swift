@@ -65,6 +65,13 @@ enum StringKey: Sendable {
     case permissionSettings, permissionSettingsMissing, permissionSettingsFailed, ok
     // Settings
     case settingsTitle, settingsInterface, settingsLanguage, languageSystem, settingsShowStrip
+    // Settings: models
+    case settingsModels, modelsNeedDaemon, modelsSaved, applyModels
+    case pmModelHeading, pmModel, pmModelPlaceholder, pmFallback, pmFallbackPlaceholder, pmCredentials
+    case judgeHeading, judgeBackend, backendSystemOne, backendOpenAI, judgeModel, judgeEndpoint, endpointPlaceholder
+    case judgeKey, saveKey, keyConfigured, keyMissingPlaceholder, keySaved, keySaveFailed, keySaveFailedLaunch
+    case keyFrom, keyNone, sourceKeychain, sourceEnv, sourceSecrets
+    case judgeOff, judgeTwoWays, missingEndpoint, missingModel, missingKey
     // Permission popup
     case popupNotice, popupHowTo, copySnippet, copied, dismiss
     case settingsPermissions, popupInstalled, popupMissing, popupAbout
@@ -135,6 +142,46 @@ struct Strings: Sendable {
         .settingsLanguage: ("Language", "语言"),
         .languageSystem: ("Follow System", "跟随系统"),
         .settingsShowStrip: ("Show the right-side strip", "显示右侧条带"),
+
+        .settingsModels: ("Models", "模型"),
+        .modelsNeedDaemon: ("The Docket service isn’t running, so these settings can’t be read or changed.",
+                            "案头后台没在运行，这一组设置暂时读不到也改不了。"),
+        .modelsSaved: ("Saved. Takes effect within a few seconds, no restart needed.", "已保存，几秒内生效，无需重启。"),
+        .applyModels: ("Apply", "应用"),
+        .pmModelHeading: ("PM model", "PM 模型"),
+        .pmModel: ("Model", "模型"),
+        .pmModelPlaceholder: ("OpenClaw’s default", "OpenClaw 默认模型"),
+        .pmFallback: ("Fallback", "备用模型"),
+        .pmFallbackPlaceholder: ("Same as the model", "与主模型相同"),
+        .pmCredentials: ("The PM runs through OpenClaw, which holds its credentials; there is no key to enter here.",
+                         "PM 经 OpenClaw 运行，凭据由 OpenClaw 管理，这里不用填 key。"),
+        .judgeHeading: ("Card attribution model", "卡片归属模型"),
+        .judgeBackend: ("Backend", "后端"),
+        .backendSystemOne: ("System One (probabilities)", "System One 概率模型"),
+        .backendOpenAI: ("OpenAI-compatible language model", "OpenAI 兼容语言模型"),
+        .judgeModel: ("Model", "模型"),
+        .judgeEndpoint: ("Endpoint", "端点"),
+        .endpointPlaceholder: ("Base URL, e.g. https://api.openai.com/v1", "base URL，如 https://api.openai.com/v1"),
+        .judgeKey: ("API key", "API key"),
+        .saveKey: ("Save", "保存"),
+        .keyConfigured: ("Configured", "已配置"),
+        .keyMissingPlaceholder: ("Not set", "未配置"),
+        .keySaved: ("Key saved to the keychain.", "密钥已存入钥匙串。"),
+        .keySaveFailed: ("Couldn’t write to the keychain (security returned %d). The key was not saved.",
+                         "写入钥匙串失败（security 返回 %d），密钥没有保存。"),
+        .keySaveFailedLaunch: ("Couldn’t write to the keychain. The key was not saved.", "写入钥匙串失败，密钥没有保存。"),
+        .keyFrom: ("Key configured, from %@.", "密钥已配置，来源：%@。"),
+        .keyNone: ("No key configured.", "未配置密钥。"),
+        .sourceKeychain: ("the keychain", "钥匙串"),
+        .sourceEnv: ("an environment variable", "环境变量"),
+        .sourceSecrets: ("OpenClaw’s secrets.json", "OpenClaw 的 secrets.json"),
+        .judgeOff: ("Not configured (%@). Attribution is off; cards still arrive, without picked background.",
+                    "未配置（%@）。归属判断已停用，卡片照常到达，只是不挑背景。"),
+        .judgeTwoWays: ("Two ways to turn it on: save a key above, or switch the backend to an OpenAI-compatible language model and fill in its endpoint, model and key.",
+                        "两种启用方式：在上面保存密钥；或把后端改为 OpenAI 兼容语言模型，填端点、模型和密钥。"),
+        .missingEndpoint: ("no endpoint", "缺端点"),
+        .missingModel: ("no model name", "缺模型名"),
+        .missingKey: ("no API key", "缺 API key"),
 
         .popupNotice: ("OpenCode is asking for a permission, and the popup that answers it isn’t installed.",
                        "OpenCode 有授权要处理，但授权弹窗组件没装。"),

@@ -8,7 +8,6 @@ import shlex
 from pathlib import Path
 
 PLACEHOLDER = re.compile(r"^[<.…]|任务名|task name", re.I)
-PREFIX = re.compile(r"^🦞\s*")
 HOME_VAR = re.compile(r"\$(?:HOME\b|\{HOME\})")
 
 
@@ -32,7 +31,30 @@ def existing_dir(raw) -> Path:
     return path
 
 
-def parse(command: str):
+def strip_prefix(title: str, prefix: str = "") -> str:
+    """The task name: the title without the configured prefix (config.json `prefix`); "" strips nothing."""
+    title, prefix = title.strip(), (prefix or "").strip()
+    if prefix and title.startswith(prefix):
+        title = title[len(prefix):].strip()
+    return title
+
+
+def same_task(session_title: str, dispatch_title: str, prefix: str = "") -> bool:
+    """Whether a session (already stripped of the configured prefix) is the dispatch's.
+
+    With no prefix configured, a dispatcher may still have put a short marker of its own before
+    the title (opencode-dispatch adds the inbox plugin's, an emoji by default): symbols only, no
+    letters or digits, then a space. A marker with letters in it ("[oc] ") has to be configured.
+    """
+    if session_title == dispatch_title:
+        return True
+    if (prefix or "").strip() or not dispatch_title or not session_title.endswith(dispatch_title):
+        return False
+    head = session_title[: -len(dispatch_title)]
+    return head[-1:].isspace() and 0 < len(head.strip()) <= 4 and not any(c.isalnum() for c in head)
+
+
+def parse(command: str, prefix: str = ""):
     """Return {"title", "directory", "brief_path", "instruction"} for a new-task dispatch, else None."""
     if not command or "--title" not in command or not re.search(r"desk-dispatch|opencode-dispatch|opencode run", command):
         return None
@@ -69,7 +91,7 @@ def parse(command: str):
         i += 1
     if not title or PLACEHOLDER.search(title.strip()):
         return None
-    return {"title": PREFIX.sub("", title.strip()), "directory": directory, "directory_raw": raw_directory, "brief_path": brief, "instruction": rest[-1] if rest else ""}
+    return {"title": strip_prefix(title, prefix), "directory": directory, "directory_raw": raw_directory, "brief_path": brief, "instruction": rest[-1] if rest else ""}
 
 
 def read_brief(directory, brief_path, limit: int = 6000) -> str:

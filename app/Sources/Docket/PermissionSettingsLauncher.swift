@@ -10,7 +10,6 @@ enum PermissionSettingsLauncher {
 
     static let defaultPaths = [
         "~/Library/Application Support/opencode/permission-notify/bin/permission-settings",
-        "~/Desktop/Code工作区/permission-notify/bin/permission-settings",
     ]
 
     static var candidates: [String] {

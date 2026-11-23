@@ -95,7 +95,7 @@ def latest_dispatch(conn, settings: dict, hours: int) -> dict:
     for key, session_id, seq, created, command in registry.dispatch_calls(conn, now - hours * 3600_000, now):
         if not any(m in command for m in ("desk-dispatch", "opencode-dispatch", "opencode run")):
             continue
-        parsed = dispatches.parse(command)
+        parsed = dispatches.parse(command, settings.get("prefix", ""))
         out = {"found": True, "key": key, "session_id": session_id, "seq": seq, "at": created, "command": command[:200]}
         if parsed and not config.watched(settings, key):
             # Cron and PM sessions dispatch too; they are never the docket's, so look further back.

@@ -2,12 +2,22 @@ eval/data/
 __pycache__/
 *.pyc
 .build/
+build/
 *.local.json
+# regenerated from docket-icon-1024.png by assets/make-icns.sh; Docket.icns is the checked-in result
+assets/Docket.iconset/
 # working files agents leave in the project
 OPENCLAW_TASK*.md
 OPENCLAW_HANDOFF*.md
+BRIEF_*.md
+/tmp/
 
 # promotion copy (forum posts, launch notes) stays local
 /docs/forum-post.md
 launch-posts.md
 promo/
+
+# internal notes; kept in the working tree, never published
+/CLAUDE.md
+/HANDOFF.md
+/RELEASE_GATE.md

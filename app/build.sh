@@ -11,6 +11,8 @@ APP="build/Docket.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Docket" "$APP/Contents/MacOS/Docket"
+# The icon is checked in; rebuild it with assets/make-icns.sh only when the SVG changes.
+cp ../assets/Docket.icns "$APP/Contents/Resources/Docket.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,6 +30,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>Docket</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.peberwang.docket</string>
+    <key>CFBundleIconFile</key>
+    <string>Docket</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -43,6 +47,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
+    <true/>
+    <key>LSMultipleInstancesProhibited</key>
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>

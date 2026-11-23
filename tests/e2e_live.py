@@ -33,7 +33,7 @@ from docket.opencode import Service  # noqa: E402
 
 SOURCE = "agent:main:e2e-docket-source"
 WORK = Path.home() / ".local/share/opencode/scratch/docket-e2e"
-TITLE = "案头端到端自检"
+TITLE = "Docket end-to-end self-check"
 
 
 def say(*args):
@@ -73,9 +73,9 @@ def main():
     say("asking OpenClaw (sandbox session) to dispatch")
     script = Path.home() / ".openclaw/workspace/skills/opencode-dispatch/scripts/opencode-dispatch"
     message = (
-        "（案头自检，不是真实任务，不要发任何聊天消息。）请只做一件事：执行下面这条命令，然后只回复一句「已交办」。\n\n"
+        "(A Docket self-check, not a real task: do not send any chat message.) Do one thing only: run the command below, then reply with exactly one line, \"Handed off.\"\n\n"
         f"cd {WORK} && {script} --detach --auto --title \"{TITLE}\" " + (f"--model {os.environ['E2E_MODEL']} " if os.environ.get("E2E_MODEL") else "") +
-        "\"在当前目录创建 hello.txt，内容为一行 hello docket。完成后用一句话说明做了什么。\""
+        "\"Create hello.txt in the current directory containing one line, hello docket. When done, say in one sentence what you did.\""
     )
     done = subprocess.run(["openclaw", "agent", "--session-key", SOURCE, "--json", "--timeout", "300", "--message", message], capture_output=True, text=True, timeout=400)
     say("OpenClaw:", (json.loads(done.stdout).get("result") or {}).get("meta", {}).get("finalAssistantVisibleText", done.stderr[-300:])[:200])
@@ -86,7 +86,7 @@ def main():
     say("context messages picked by the judge:", len(json.loads(row["context"] or "[]")))
 
     say("deciding: ask for a second line")
-    api("POST", f"/api/cards/{first['card']['id']}/decide", {"choices": {}, "reply": "再在 hello.txt 末尾加一行 second round，就可以了。"})
+    api("POST", f"/api/cards/{first['card']['id']}/decide", {"choices": {}, "reply": "Append one more line, second round, to hello.txt, and that is it."})
     second = wait_for(
         lambda s: next((d for d in s["delegations"] if d["id"] == first["id"] and d["state"] == "awaiting" and d["card"]["id"] != first["card"]["id"]), None),
         "second card",

@@ -4,6 +4,24 @@
 
 A chat is synchronous: one question you have not answered holds up the whole conversation. A coding agent (OpenCode, Claude Code or Codex) is parallel: handed-off tasks move forward in the background, each on its own. Between the two there is no layer where a judgment can pause, pile up and arrive late. OpenClaw Docket is that layer, a native macOS panel. Everything that needs you, but not now, lands there.
 
+## Five-minute quick start
+
+You need macOS 14+, `xcode-select --install`, a working [OpenClaw](https://openclaw.ai), and one coding agent CLI (here Claude Code, logged in).
+
+```sh
+git clone https://github.com/PeberWang/docket.git && cd docket
+bash scripts/install.sh          # builds Docket.app, starts the service and the app
+```
+
+1. A tray icon appears in the menu bar and a pill on the right screen edge (⌥⌘D opens the panel).
+2. Add one line to `~/.openclaw/workspace/AGENTS.md`:
+   `Hand coding work off with the desk-dispatch skill, reply with one line, and leave the rest to Docket.`
+3. In your OpenClaw chat: "Hand off to Claude Code: add a README section on testing to ~/my-project."
+   Or straight from a shell: `cd ~/my-project && ~/.openclaw/workspace/skills/desk-dispatch/scripts/desk-dispatch --engine claude --title "Testing docs" "Add a README section on testing"`
+4. A card for the handoff shows up on the panel at once; when the run ends, the PM's brief replaces it.
+
+No judge key is needed to get here. Without one, Settings → Models shows the judge as not configured and cards arrive without picked background.
+
 <p align="center"><img src="docs/panel-en.png" width="380" alt="The Docket panel: a brief with two decisions and recommended options"></p>
 
 ## Three rhythms
@@ -71,7 +89,14 @@ The full rationale is in [docs/design.md](docs/design.md).
 
 ## Installation
 
-Requirements: macOS 14 or later, Command Line Tools (`xcode-select --install`), [OpenClaw](https://openclaw.ai), and at least one coding agent: [OpenCode](https://opencode.ai) Desktop with the [inbox plugin](https://github.com/PeberWang/opencode-openclaw-inbox) v0.4.0 or later, or the [Claude Code](https://code.claude.com) / [Codex](https://developers.openai.com/codex) CLI, logged in.
+### Dependencies
+
+- **Required:** macOS 14 or later and Command Line Tools (`xcode-select --install`, which brings Swift and `/usr/bin/python3`). Docket uses only the Python standard library and has no Swift packages.
+- **Required:** [OpenClaw](https://openclaw.ai), with `openclaw` on your `PATH`. Docket reads its transcripts (read-only) and runs the PM through `openclaw agent`, so the PM uses whichever model and credentials your OpenClaw has.
+- **Required, at least one coding agent:** [OpenCode](https://opencode.ai) Desktop with the [inbox plugin](https://github.com/PeberWang/opencode-openclaw-inbox) v0.4.0 or later, or the [Claude Code](https://code.claude.com) / [Codex](https://developers.openai.com/codex) CLI, logged in.
+- **Optional, the judge:** a [TypeSafe](https://console.typesafe.ai) key for System One, or any OpenAI-compatible language-model endpoint with its model name and key. Without either, the judge is off: cards still register, without picked background or chat attribution.
+
+### Install
 
 ```sh
 git clone https://github.com/PeberWang/docket.git
@@ -83,9 +108,9 @@ The script builds the app into `~/Applications`, starts the service and the app 
 
 1. **Tell OpenClaw to hand off through Docket.** Add to `~/.openclaw/workspace/AGENTS.md`:
    > Hand coding work off with the desk-dispatch skill. After dispatching, reply with one line and leave the follow-up to Docket.
-2. **Optional: the judge.** Get a key at [console.typesafe.ai](https://console.typesafe.ai) and put it in `TYPESAFE_API_KEY` or in `~/.openclaw/workspace/secrets.json` as `"typesafe": {"api_key": "…"}`. Without it, handoffs work, without picked background and chat mentions.
+2. **Optional: the judge.** Settings → Models shows it as not configured until you take one of two ways: save a TypeSafe key there (it goes to the keychain; `TYPESAFE_API_KEY` or `"typesafe": {"api_key": "…"}` in `~/.openclaw/workspace/secrets.json` also work), or switch the backend to an OpenAI-compatible language model and fill in its endpoint, model and key. Without it, handoffs work, without picked background and chat mentions.
 
-To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too).
+To remove it: `bash scripts/uninstall.sh` takes out the launch agents, the app, the skill and the settings, and prints where your handoff history is kept; add `--purge` to delete that too.
 
 ## Daily use
 
@@ -106,10 +131,17 @@ To remove it: `bash scripts/uninstall.sh` (add `--purge` to delete the data too)
 | `locale` | `"auto"` | `"auto"` follows macOS; `"en"` or `"zh"` |
 | `engine` | `"opencode"` | default coding agent: `opencode`, `claude` or `codex` |
 | `pm_model` | `null` | model for the PM sessions; `null` uses your OpenClaw default |
+| `pm_fallback_model` | `null` | model for a third try when the PM's reply failed twice; `null` = `pm_model` again |
+| `fallback_model` | `null` | OpenCode model (`provider/model`) to retry a run once with after a usage limit; `null` = no retry |
+| `prefix` | `""` | a title prefix your dispatcher puts on OpenCode sessions. `""` matches by title alone, and still accepts a symbols-only marker such as the inbox plugin's default emoji; a prefix with letters, like `"[oc] "`, has to be set here |
+| `reconcile_max_age_hours` | `6` | on restart, a pending handoff idle longer than this is closed as overdue instead of woken |
+| `judge` | `{}` | `backend` (`"systemone"` or `"openai"`), `model`, `endpoint`, `keychain_service`; easier from Settings → Models |
 | `attribute` | `true` | recognise later mentions of a handoff in the chat |
 | `context_threshold` | `0.5` | how sure the judge must be to keep a message as background |
 | `move_threshold` | `0.85` | how sure it must be that a chat message belongs to a handoff |
 | `engines` | | per-agent CLI arguments, e.g. `{"claude": {"args": [...]}}` |
+
+A value of the wrong type (say, a string where a number belongs) is logged and replaced by its default; it does not stop the service.
 
 Nobody is there to approve prompts during a run. OpenCode gets `--auto` when `desk-dispatch --auto` is used; Claude Code runs with `--permission-mode acceptEdits`, an allow list and `--permission-prompts none`; Codex with `--sandbox workspace-write`. Change them under `engines`.
 
@@ -127,7 +159,7 @@ Early, and used daily by its author with OpenCode. Known limits:
 - The Claude Code path is tested end to end; the Codex path follows the official CLI docs but has not been run yet. Reports welcome.
 - The round limit is fixed at 3. The panel docks to the main screen.
 
-Development notes: offline tests with `python3 -I -m unittest discover -s tests -p 'test_*.py'`; a fake service for UI work in `app/dev-daemon.py`; the judge's evaluation harness in `eval/` (it needs your own data, which never leaves `eval/data/`).
+Development notes: offline tests with `python3 -I -m unittest discover -s tests -p 'test_*.py'`; `bash app/build.sh` builds the app (with Command Line Tools only, `ld` warns that two search paths under `/Library/Developer/CommandLineTools/Developer` are not found; that is harmless and the only expected warning); a fake service for UI work in `app/dev-daemon.py`; the judge's evaluation harness in `eval/` (it needs your own data, which never leaves `eval/data/`).
 
 ## 中文说明
 
@@ -149,7 +181,7 @@ Development notes: offline tests with `python3 -I -m unittest discover -s tests 
 
 请示件是一句话进展加最多两个待你定的问题，每个问题给出推荐选项，可以等到你有空再看。你点一下或回一句，项目经理转给编程代理续做。界面和请示件跟随系统语言，可在配置里设 `"locale": "zh"`。
 
-安装：`bash scripts/install.sh`。
+安装：`bash scripts/install.sh`；卸载：`bash scripts/uninstall.sh`（保留交办记录，加 `--purge` 一并删除）。没有判断模型的密钥也能用，设置窗口会显示「未配置」。
 
 ## License
 

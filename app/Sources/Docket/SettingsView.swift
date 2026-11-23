@@ -18,6 +18,7 @@ struct SettingsView: View {
                     set: { store.hidden = !$0 }
                 ))
             }
+            ModelsSection(s: s)
             Section(s(.settingsPermissions)) {
                 let installed = store.popupStatus == .installed
                 Label(s(installed ? .popupInstalled : .popupMissing),

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFCF6"/>
+      <stop offset="1" stop-color="#E7D6BC"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F8F1E5"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D6A96E"/>
+      <stop offset="1" stop-color="#AD7B3D"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="170%" height="170%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#5E4326" flood-opacity="0.26"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="170%" height="170%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#5E4326" flood-opacity="0.14"/>
+    </filter>
+    <clipPath id="squircle">
+      <path d="M512 32c152 0 214 2 275 14 57 12 98 53 109 109 12 61 14 123 14 357s-2 296-14 357c-11 56-52 97-109 109-61 12-123 14-275 14s-214-2-275-14c-57-12-98-53-109-109-12-61-14-123-14-357s2-296 14-357c11-56 52-97 109-109C298 34 360 32 512 32z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#paper)"/>
+    <path d="M0 800h1024v224H0z" fill="#D9C3A4" opacity="0.5"/>
+  </g>
+
+  <g filter="url(#soft)" transform="rotate(-9 512 560)">
+    <rect x="286" y="262" width="530" height="490" rx="46" fill="#F5E9D6" stroke="#D3B996" stroke-width="5"/>
+  </g>
+  <g filter="url(#soft)" transform="rotate(-4.5 512 560)">
+    <rect x="262" y="280" width="540" height="492" rx="46" fill="#FBF5EB" stroke="#CDB28F" stroke-width="5"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <!-- 露在卡片上方的标签 -->
+    <path d="M304 258a30 30 0 0 1 30-30h132a30 30 0 0 1 30 30v70H304z" fill="url(#gold)"/>
+    <!-- 卡片本体 -->
+    <rect x="238" y="304" width="548" height="486" rx="46" fill="url(#card)" stroke="#C4A582" stroke-width="6"/>
+    <path d="M238 350a46 46 0 0 1 46-46h456a46 46 0 0 1 46 46v10H238z" fill="url(#gold)"/>
+
+    <rect x="296" y="430" width="400" height="32" rx="16" fill="#2E251F"/>
+    <rect x="296" y="500" width="326" height="23" rx="11.5" fill="#2E251F" opacity="0.5"/>
+    <rect x="296" y="556" width="372" height="23" rx="11.5" fill="#2E251F" opacity="0.5"/>
+    <rect x="296" y="612" width="266" height="23" rx="11.5" fill="#2E251F" opacity="0.32"/>
+
+    <g transform="translate(296 672)">
+      <circle cx="23" cy="23" r="23" fill="none" stroke="#AD7B3D" stroke-width="9"/>
+      <path d="M12 24l9 10 16-19" fill="none" stroke="#AD7B3D" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="68" y="11" width="200" height="23" rx="11.5" fill="#2E251F" opacity="0.38"/>
+    </g>
+  </g>
+</svg>

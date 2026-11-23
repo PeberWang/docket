@@ -440,7 +440,7 @@ class Flows(unittest.TestCase):
 
         class Session:
             def session(self, sid):
-                return {"title": f"🦞 {parsed['title']}", "time": {"created": 1}, "location": {}}
+                return {"title": parsed["title"], "time": {"created": 1}, "location": {}}
 
         daemon.Service = Session
         with mock.patch.dict(os.environ, {"HOME": str(home)}), \
@@ -561,13 +561,15 @@ class Flows(unittest.TestCase):
         self.assertIn("Only close when the user has said to wrap up", message)
         self.assertIn("stop and put it on a card. Do not decide it for the user", message)
         self.assertIn("- 2. sources 分层：留给你定", message)
-        self.assertIn("照做", message)
-        self.assertIn("出卡问", message)
+        self.assertIn('"do"', message)
+        self.assertIn('"ask the user"', message)
+        self.assertNotIn("照做", message)
+        self.assertNotIn("出卡问", message)
         self.assertEqual(pm.reserved_items(brief), ["2. sources 分层：留给你定"])
         validate = pm.validate_handback(1, brief)
-        self.assertTrue(validate({"action": "close", "conclusion": "done", "checklist": ["x → 出卡问"]}))
+        self.assertTrue(validate({"action": "close", "conclusion": "done", "checklist": ["x → ask the user"]}))
         self.assertTrue(validate(dict({"action": "card", "card": CARD})))  # reserved items need a checklist
-        self.assertEqual(validate({"action": "card", "card": CARD, "checklist": ["sources 分层 → 出卡问"]}), [])
+        self.assertEqual(validate({"action": "card", "card": CARD, "checklist": ["sources 分层 → ask the user"]}), [])
         # With the budget spent a close is the only way out, so it stays allowed.
         self.assertEqual(pm.validate_handback(3, None)({"action": "close", "conclusion": "done"}), [])
 
@@ -575,7 +577,7 @@ class Flows(unittest.TestCase):
         self.db.execute("update delegations set brief = '2. sources 分层：待用户决定' where id = 'ses_x'")
         self.take_over()
         replies = [{"action": "close", "conclusion": "all done"},
-                   {"action": "card", "card": dict(CARD, progress="this piece is done; go on or wrap up?"), "checklist": ["sources 分层 → 出卡问"]}]
+                   {"action": "card", "card": dict(CARD, progress="this piece is done; go on or wrap up?"), "checklist": ["sources 分层 → ask the user"]}]
 
         def ask(key, message, validate, record=None):  # the real loop's shape: first passing reply wins
             for reply in replies:
@@ -588,7 +590,7 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.state(), "awaiting")
         self.assertIn("go on or wrap up", json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"])
         event = self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'pm:checklist'").fetchone()
-        self.assertEqual(json.loads(event[0])["items"], ["sources 分层 → 出卡问"])
+        self.assertEqual(json.loads(event[0])["items"], ["sources 分层 → ask the user"])
 
     # ---------- the panel's order ----------
 
@@ -643,15 +645,15 @@ class Flows(unittest.TestCase):
 
     def test_home_variable_in_dispatch_directory_is_stored_expanded(self):
         home = Path(tempfile.mkdtemp()).resolve()
-        (home / "Desktop/Code工作区/proj").mkdir(parents=True)
-        row = self.register('cd "$HOME/Desktop/Code工作区/proj" && opencode-dispatch --detach --auto --title "🦞 T" "go"', home)
-        self.assertEqual(row["directory"], str(home / "Desktop/Code工作区/proj"))
+        (home / "Desktop/项目/proj").mkdir(parents=True)
+        row = self.register('cd "$HOME/Desktop/项目/proj" && opencode-dispatch --detach --auto --title "T" "go"', home)
+        self.assertEqual(row["directory"], str(home / "Desktop/项目/proj"))
         self.assertEqual(row["state"], "running")
         self.assertIsNone(ledger.open_card(self.db, "ses_new"))
 
     def test_missing_dispatch_directory_fails_visibly(self):
         home = Path(tempfile.mkdtemp()).resolve()
-        row = self.register('cd "$HOME/nope" && opencode-dispatch --detach --title "🦞 T" "go"', home)
+        row = self.register('cd "$HOME/nope" && opencode-dispatch --detach --title "T" "go"', home)
         self.assertIsNone(row["directory"])  # nothing unrunnable is stored
         self.assertEqual(row["state"], "awaiting")  # a technical fault is shown, never closed for the user
         card = ledger.open_card(self.db, "ses_new")
@@ -687,7 +689,7 @@ class Directories(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def directory(self, cd: str):
-        return dispatches.parse(f'cd {cd} && opencode-dispatch --detach --title "🦞 T" "go"')["directory"]
+        return dispatches.parse(f'cd {cd} && opencode-dispatch --detach --title "T" "go"')["directory"]
 
     def test_home_variable_expands(self):
         for cd in ('"$HOME/x"', "$HOME/x", "'${HOME}/x'", '"${HOME}/x/"'):

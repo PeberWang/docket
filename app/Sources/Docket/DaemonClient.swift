@@ -71,6 +71,22 @@ final class DaemonClient {
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["state"] as? String
     }
 
+    func fetchModelSettings() async throws -> ModelSettings {
+        try decodeSettings(try await send("GET", "/api/settings"))
+    }
+
+    func saveModelSettings(_ body: [String: Any]) async throws -> ModelSettings {
+        try decodeSettings(try await send("POST", "/api/settings", json: body))
+    }
+
+    private func decodeSettings(_ data: Data) throws -> ModelSettings {
+        do {
+            return try JSONDecoder().decode(ModelSettings.self, from: data)
+        } catch {
+            throw DocketError.unreadable
+        }
+    }
+
     private func escaped(_ id: String) -> String {
         id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id
     }

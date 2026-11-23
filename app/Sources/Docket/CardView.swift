@@ -18,6 +18,28 @@ struct CardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            content
+                .opacity(CardDimming.content(phase))
+            footer
+                .opacity(CardDimming.footer(phase))
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(isOpen ? 0.06 : 0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: Pieces
+
+    /// Everything above the actions. This is the part that dims once the card is out of the PM's hands.
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 12) {
             header
 
             // The run's result (or the conclusion), set apart on its own tinted block.
@@ -58,8 +80,14 @@ struct CardView: View {
                 SectionDivider()
                 handledForYou(items)
             }
+        }
+    }
 
-            if phase != .closed {
+    /// The divider and the actions. Never dimmed: on a taken-over card, handing back is the one thing left to do.
+    @ViewBuilder
+    private var footer: some View {
+        if phase != .closed {
+            VStack(alignment: .leading, spacing: 12) {
                 SectionDivider()
                 VStack(alignment: .leading, spacing: 8) {
                     if isOpen && !isLimit {  // at the limit only closing or taking over is left
@@ -75,20 +103,7 @@ struct CardView: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(isOpen ? 0.06 : 0.035))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
-        )
-        .opacity(phase == .closed || phase == .takenOver ? 0.55 : 1)
     }
-
-    // MARK: Pieces
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -265,6 +280,17 @@ struct CardView: View {
             .disabled(busy)
         }
     }
+}
+
+/// How far each part of a card fades. A closed or taken-over card dims its content, never its actions.
+enum CardDimming {
+    static let dimmed = 0.55
+
+    static func content(_ phase: Phase) -> Double {
+        phase == .closed || phase == .takenOver ? dimmed : 1
+    }
+
+    static func footer(_ phase: Phase) -> Double { 1 }
 }
 
 /// A hairline between the parts of a card.
