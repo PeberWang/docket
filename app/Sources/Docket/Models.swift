@@ -12,6 +12,7 @@ struct Delegation: Decodable, Sendable, Identifiable {
     var engine: String?
     var state: String
     var rounds: Int?
+    var handbacks: Int?
     var queued: Int?
     var roundLimit: Int?
     var dispatchedAt: Double?
@@ -19,7 +20,7 @@ struct Delegation: Decodable, Sendable, Identifiable {
     var card: Card?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, engine, state, rounds, queued, card
+        case id, title, engine, state, rounds, handbacks, queued, card
         case roundLimit = "round_limit"
         case dispatchedAt = "dispatched_at"
         case updatedAt = "updated_at"

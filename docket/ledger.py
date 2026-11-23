@@ -21,8 +21,9 @@ ROUND_LIMIT = 3
 #   pending       the PM is writing a card (OpenCode just finished, failed or asked)
 #   awaiting      a card is waiting for the user's decision
 #   limit         the user has spent all ROUND_LIMIT rounds; no more cards, only close or take over
-#   taken_over    the user took it into OpenCode; the docket only shows a link
+#   taken_over    the user took it into OpenCode; the docket asks nothing until it is handed back
 #   closed        done; the conclusion went back to OpenClaw's memory
+# taken_over is not an ending: hand_back puts it on the docket again (awaiting or pending).
 STATES = ("running", "pending", "awaiting", "limit", "taken_over", "closed")
 # Once at the limit a handoff stays there: only an ending moves it on.
 LIMIT_EXITS = ("taken_over", "closed")
@@ -95,8 +96,8 @@ def connect(path: Path = DB) -> sqlite3.Connection:
     conn.execute("pragma foreign_keys = on")
     conn.executescript(SCHEMA)
     columns = {row[1] for row in conn.execute("pragma table_info(delegations)")}
-    for name, kind in (("engine", "text not null default 'opencode'"), ("engine_session", "text"), ("model", "text")):
-        if name not in columns:  # ledgers from before the engine layer
+    for name, kind in (("engine", "text not null default 'opencode'"), ("engine_session", "text"), ("model", "text"), ("handbacks", "integer not null default 0")):
+        if name not in columns:  # ledgers from before the engine layer (handbacks: before hand_back)
             conn.execute(f"alter table delegations add column {name} {kind}")
     card_columns = {row[1] for row in conn.execute("pragma table_info(cards)")}
     if "queued" not in card_columns:
@@ -232,18 +233,49 @@ def spend_round(conn, delegation_id: str, card_id: int | None = None, resolution
     return rounds
 
 
+def hand_back(conn, delegation_id: str) -> str | None:
+    """The user hands a taken-over handoff back to the docket, in one transaction.
+
+    Returns the new state, or None when the handoff is not taken over (a second click, or
+    any other state: nothing changes). A card left waiting at the takeover goes up and the
+    handoff is awaiting; otherwise it is pending, because the PM is woken next. Rounds stay
+    as they were: handing back never refills the budget. `handbacks` counts how often.
+    """
+    conn.execute("begin immediate")
+    try:
+        row = conn.execute("select state, handbacks from delegations where id = ?", (delegation_id,)).fetchone()
+        if not row or row[0] != "taken_over":
+            conn.execute("rollback")
+            return None
+        if not open_card(conn, delegation_id):
+            next_queued(conn, delegation_id)
+        state = "awaiting" if open_card(conn, delegation_id) else "pending"
+        conn.execute(
+            "update delegations set state = ?, handbacks = handbacks + 1, updated_at = ? where id = ?", (state, now(), delegation_id)
+        )
+        log(conn, delegation_id, "handback", {"handbacks": row[1] + 1})
+        log(conn, delegation_id, f"state:{state}")
+        conn.execute("commit")
+    except BaseException:
+        conn.execute("rollback")
+        raise
+    return state
+
+
 def active(conn) -> list:
     return conn.execute("select * from delegations where state not in ('closed') order by dispatched_at").fetchall()
 
 
-def snapshot(conn, closed_hours: int = 24) -> list[dict]:
-    """Everything the panel shows: open delegations plus ones closed in the last day."""
+def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dict]:
+    """Everything the panel shows: open delegations plus ones closed in the last day.
+    A taken-over one stays for a week so it can still be handed back; older ones would
+    only crowd the panel (hand_back works on them all the same, e.g. from scripts/handback.py)."""
     since = now() - closed_hours * 3600_000
     rows = conn.execute(
         "select * from delegations where state not in ('closed', 'taken_over')"
-        " or updated_at >= ? order by "
+        " or (state = 'taken_over' and updated_at >= ?) or updated_at >= ? order by "
         "case state when 'awaiting' then 0 when 'limit' then 0 when 'pending' then 1 when 'running' then 2 when 'taken_over' then 3 else 4 end, updated_at desc",
-        (since,),
+        (now() - taken_over_days * 86400_000, since),
     ).fetchall()
     out = []
     for row in rows:
@@ -263,6 +295,7 @@ def snapshot(conn, closed_hours: int = 24) -> list[dict]:
                 "engine": row["engine"],
                 "state": row["state"],
                 "rounds": row["rounds"],
+                "handbacks": row["handbacks"],
                 "queued": conn.execute(
                     "select count(*) from cards where delegation_id = ? and resolved_at is null and queued = 1", (row["id"],)
                 ).fetchone()[0],

@@ -305,3 +305,73 @@ defaults delete io.github.peberwang.docket permissionSettingsPaths   # 回到缺
 ## 要重启什么
 
 守护进程（由 OpenClaw 负责）。app 不用动。
+
+# 交接：交还，让 taken_over 的卡回到案头（对应 BRIEF_docket_handback.md）
+
+## 新增端点
+
+`POST /api/delegations/<id>/handback` → `202 {"ok": true, "state": "pending" | "awaiting"}`，形状照 `/takeover`、`/close`。
+
+- 只接受 `taken_over`。其他状态（含 closed、从没接管过、已经交还过）返回 409，文案「只有已接管的交办才能交还，这件现在不是接管状态」；不存在的交办同样 409「没有这件交办」（与其他端点一致）。
+- 状态转换在 `ledger.hand_back()` 里一个事务完成（`begin immediate`，与 `spend_round` 同法），两次并发点击只有一次生效：
+  - 接管时留下的排队卡（接管只撤掉开卡）提为开卡 → `awaiting`；
+  - 否则 → `pending`，紧接着唤醒 PM。
+- 记 `handback` 事件（带累计次数）和对应的 `state:*` 事件，事件表自带时间。
+- 新列 `delegations.handbacks`（旧账本启动时自动 `alter table` 补上），`GET /api/state` 每件交办多一个 `handbacks` 字段。
+
+## 交还后不进轮次重置（决定）
+
+- `rounds` 原样保留，交还本身也不花轮次。理由：交还若清零，接管→交还一来一回就能无限续命，轮次预算形同虚设。
+- 已满 3 轮的卡也能交还：PM 收到的消息里预算行写明「最后一轮，只能续派或结案」；它若还想出卡会被 `show_card` 拒掉，limit 卡回来、状态回 `limit`。它若续派，那一轮跑完 `write_card` 照旧走 `wrap_up`。
+- 续派闸门 `relayed_count()` 不算 `via: handback` 的那次续派（和 fallback 重试同理），否则交还后 PM 推一块，就会占掉用户后面一次答卡的续派名额。每次交还只免这一次；之后的续派仍要靠用户答卡。
+
+## 给 PM 的消息
+
+`pm.handback_wake()`：一句「用户接管了一阵，现在交还给你，交还不花轮次」，一句「按你的节奏推进：先看现状（用户可能改过东西），把下一块续派给 OpenCode，长任务切成能验收的小块，拿不准才出卡，做完就结案」，加预算行、OpenCode 最后一条回复（用户自己在会话里跑过，PM 需要知道现在停在哪）、语言行和动作格式。没有计划，计划是 PM 的产出。
+
+走现有 `act()`，因此失败时照常出带「重试」的故障卡，重试参数里带着 `via=handback`。
+
+## 与任务书的出入
+
+1. **daemon 里六处 `state in ('closed','taken_over')` 没改成只排除 closed。** 这些检查看的是当前状态，不是历史：交还后状态是 pending/running/awaiting，六处本来就放行，单测里交还后的 run 结束、答卡、limit、sweep 都按正常卡处理。反过来若改成只排除 closed，仍在接管中的卡就会被 `on_run_end`、权限请求重新出卡，和任务书自己要的「taken_over 仍然不接新请示」相反。
+2. **交还后先是 `pending`，不是 `running`。** ledger 里 `pending` 的定义就是「PM 正在写」，而 `reconcile()` 靠它在守护进程重启后把中断的 PM 作业补回来；直接置 running 的话，重启时卡会停在 running、OpenCode 会话已空闲，sweep 也不会碰它（空闲时间早于 updated_at）。PM 续派后才是 `running`，出卡则 `awaiting`，与其他路径一致。
+3. **面板快照**原来把 24 小时前接管的卡藏掉，交还就无从点起；现在接管的卡在面板上保留 7 天（`snapshot(taken_over_days=7)`），更早的不再堆在面板上，但 `scripts/handback.py` 对它们照样有效。
+
+## 顺手修的两处
+
+- `Docket.relay()`：续派后只要还有开卡（或能提升的排队卡）就置 `awaiting`。原来只在「没有开卡但有排队卡」时这样做，若开卡还在（交还时留下的那张），状态会落到 running，面板看不到那张卡，两小时后被 sweep 当孤儿撤掉。
+- `Docket.act()`：PM 想完之后若交办已被再次接管或已结案，丢弃它的动作并记 `pm:dropped`。交还后用户立刻又接管时，PM 的续派不会再发进用户正在用的会话、也不会把状态从 taken_over 改掉。
+
+## 界面
+
+- `CardView`：`phase == .takenOver` 时动作行显示「在 OpenCode 打开 / 在终端接管」与「交还」两个按钮（原来是空的），两个方向都能走；「交还」悬停提示「交还给 PM 继续推进，已用的轮次不清零」。
+- `Store.handback()`：请求成功后立刻把本地这张卡的状态改成返回的 `pending`/`awaiting`，不等下一次刷新；若别处已交还导致 409，按已处理收尾，不报错。
+- 文案进 `Strings.swift`：`handBack`（Hand back / 交还）、`handBackHelp`。`Models.Delegation` 多一个可选的 `handbacks`。
+- `app/dev-daemon.py` 也加了 `/handback`，方便不连真守护进程看界面。
+
+## 命令行
+
+```
+/usr/bin/python3 -I scripts/handback.py <delegation-id>
+```
+
+从 `$DOCKET_HOME/daemon.json`（默认 `~/Library/Application Support/docket/`）读地址和 token，调上面的端点。成功打印一行，如 `handed back ses_…: pending, the PM is picking it up.`；被拒或连不上时在 stderr 打一句可读的话（`handback: Docket refused ses_…: <原因>` / `the Docket service is not running (no daemon.json)`），退出码 1，参数不对退出码 2，不打栈。供 OpenClaw 主会话在用户说「交还给你」时直接调。
+
+## 测试
+
+`tests/test_flows.py` 新增 7 条，`/usr/bin/python3 -I -m unittest discover -s tests` 65 条全过：
+
+- `test_a_taken_over_handoff_can_be_handed_back`：接管中 run 结束不出卡；交还 → pending → PM 续派 → running；rounds 不变、handbacks=1、续派不占闸门、有 handback 事件；下一次 run 结束重新出卡。
+- `test_a_closed_handoff_cannot_be_handed_back`：closed（以及对 closed 点接管后）交还被拒，状态与计数不变；不存在的交办被拒。
+- `test_handing_back_twice_is_refused_and_counted_once`：没接管过被拒；第二次交还明确报错、计数仍为 1；再接管再交还计为 2。
+- `test_a_card_left_waiting_goes_up_on_handback`：接管时排着的卡在交还后成为开卡，状态 awaiting，PM 续派后仍是 awaiting。
+- `test_after_handback_the_limit_and_the_sweep_still_hold`：满轮后接管再交还，PM 出卡被拒、回到 limit、rounds 仍为 3、limit 卡不能作答；交还后的孤儿卡照常被 sweep 撤掉。
+- `test_a_pm_reply_after_another_takeover_is_dropped`：PM 思考期间又被接管，续派被丢弃，状态保持 taken_over。
+
+手工验收：`/usr/bin/python3 -I tests/e2e_handback.py`。临时 DOCKET_HOME 里起真守护进程的 HTTP 服务（PM 与编程代理用桩），走一遍「面板上有卡 → POST takeover → 跑 `scripts/handback.py` → 卡回到队列、PM 续派、rounds 0 handbacks 1 → 再交还一次得到一行报错 → 下一次 run 结束重新出卡」，跑完删掉沙箱。不碰 OpenClaw、OpenCode 和已安装的案头。
+
+`swift build -c release` 通过；没有替换 `app/build/Docket.app`。
+
+## 要重启什么
+
+守护进程（新端点、新列迁移都在启动时生效）和案头 app（新按钮）。重启前已经 taken_over 的卡：7 天内的会重新出现在面板上，带「交还」按钮；更早的用脚本交还。

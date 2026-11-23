@@ -561,16 +561,21 @@ class Docket:
         ledger.resolve_card(db, card_id, {**resolution, "replayed_at": ledger.now()})
         self.decide(card_id, resolution.get("choices") or {}, resolution.get("reply") or "", replay=True)
 
-    def act(self, delegation_id: str, message: str, confirm: str | None = None):
+    def act(self, delegation_id: str, message: str, confirm: str | None = None, via: str | None = None):
         """Wake the PM and carry out its action.
 
         `confirm` holds the chat text when the trigger was a main-thread mention: a relay
         then becomes a card asking the user to confirm, because the judge can be wrong.
         The mention already cost its round, so the confirmation does not cost another.
+        `via` tags the relay that follows ("handback"), see relayed_count.
         """
         row = self.delegation(delegation_id)
         action = self.ask_pm(row, message, pm.validate_action)
         kind = action["action"]
+        now = self.delegation(delegation_id)["state"]
+        if now in ("closed", "taken_over"):  # taken over (again) or closed while the PM was thinking
+            ledger.log(self.db(), delegation_id, "pm:dropped", {"action": kind, "state": now})
+            return
         if kind == "relay" and confirm is not None:
             t = self.t
             card = {
@@ -593,7 +598,7 @@ class Docket:
             self.show_card(delegation_id, "question", card)
             return
         if kind == "relay":
-            self.relay(delegation_id, action["message"])
+            self.relay(delegation_id, action["message"], via=via)
         elif kind == "card":
             self.show_card(delegation_id, action["card"].get("kind", "question"), action["card"])
         else:
@@ -601,12 +606,14 @@ class Docket:
         self.check_limit(delegation_id)
 
     def relayed_count(self, delegation_id: str) -> int:
+        """Relays an answer paid for: a fallback retry repeats one, a handback's comes free."""
         return self.db().execute(
-            "select count(*) from events where delegation_id = ? and kind = 'relayed' and coalesce(detail, '') not like '%\"via\": \"fallback\"%'",
+            "select count(*) from events where delegation_id = ? and kind = 'relayed'"
+            " and coalesce(detail, '') not like '%\"via\": \"fallback\"%' and coalesce(detail, '') not like '%\"via\": \"handback\"%'",
             (delegation_id,),
         ).fetchone()[0]
 
-    def relay(self, delegation_id: str, message: str, model: str | None = None):
+    def relay(self, delegation_id: str, message: str, model: str | None = None, via: str | None = None):
         """Hand the user's decision to the coding agent. Rounds were spent when the user acted;
         the second gate here only stops more relays than the budget has rounds."""
         row = self.delegation(delegation_id)
@@ -620,9 +627,10 @@ class Docket:
         else:
             engine.resume(row, message, model)
         ledger.set_state(self.db(), delegation_id, "running")
-        ledger.log(self.db(), delegation_id, "relayed", {"message": message[:500]})
-        if not ledger.open_card(self.db(), delegation_id) and ledger.next_queued(self.db(), delegation_id):
-            ledger.set_state(self.db(), delegation_id, "awaiting")  # a card was waiting behind the one just answered
+        ledger.log(self.db(), delegation_id, "relayed", {"message": message[:500], **({"via": via} if via else {})})
+        # A card still on show (one left from before a handback), or one waiting behind the card just answered.
+        if ledger.open_card(self.db(), delegation_id) or ledger.next_queued(self.db(), delegation_id):
+            ledger.set_state(self.db(), delegation_id, "awaiting")
         self.check_limit(delegation_id)
 
     def retry(self, delegation_id: str):
@@ -725,6 +733,37 @@ class Docket:
         if row["state"] != "closed":
             ledger.set_state(self.db(), delegation_id, "taken_over")
         self.engine(row).takeover(row)
+
+    def handback(self, delegation_id: str) -> str:
+        """The user hands a taken-over handoff back: the PM carries on at its own pace.
+
+        Only from taken_over; anything else is refused, a second click included. Rounds are
+        not reset (see ledger.hand_back) and handing back costs none. The PM is told in one
+        short message; how to split the rest and what to push next is its call. Its first
+        relay after a handback does not count against the relay gate, since no answer paid for it.
+        """
+        row = self.delegation(delegation_id)
+        if not row:
+            raise ValueError(self.t("err_missing"))
+        state = ledger.hand_back(self.db(), delegation_id)
+        if state is None:
+            raise ValueError(self.t("err_not_taken_over"))
+        log.info("handed back %s (%s)", delegation_id, state)
+        message = pm.handback_wake(self.latest_reply(row), row["rounds"])
+        self.submit(delegation_id, self.act, delegation_id, message, None, "handback")
+        return state
+
+    def latest_reply(self, row: dict) -> str:
+        """The coding agent's last reply, best effort: the user may have worked in the session meanwhile."""
+        try:
+            reply = self.engine(row).last_reply(row)
+            if reply:
+                return reply
+            last_run = self.db().execute("select out from runs where delegation_id = ? order by id desc limit 1", (row["id"],)).fetchone()
+            return self.engine(row).parse(row, Path(last_run["out"]))["reply"] if last_run else ""
+        except Exception as error:
+            log.debug("last reply unavailable for %s: %s", row["id"], error)
+            return ""
 
     # ---------- main-thread mentions ----------
 
@@ -1059,6 +1098,8 @@ def serve(docket: Docket):
                     docket.close(parts[2], (body.get("reply") or "").strip())
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "takeover":
                     docket.takeover(parts[2])
+                elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "handback":
+                    return self.reply(202, {"ok": True, "state": docket.handback(parts[2])})
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "retry":
                     return self.reply(202, {"ok": True, "model": docket.retry(parts[2])})
                 elif parts[:2] == ["api", "cards"] and len(parts) == 4 and parts[3] == "replay":

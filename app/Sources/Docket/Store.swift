@@ -260,6 +260,20 @@ final class Store: ObservableObject {
         } onSuccess: { _ in }
     }
 
+    /// Give a taken-over handoff back to its PM. The card leaves the taken-over look at once,
+    /// before the refresh that follows brings the daemon's full picture.
+    func handback(_ delegation: Delegation) {
+        var state: String?
+        perform(delegation.id, settled: { store in
+            store.delegations.first { $0.id == delegation.id }?.phase != .takenOver
+        }) { client in
+            state = try await client.handback(delegationID: delegation.id)
+        } onSuccess: { store in
+            guard let index = store.delegations.firstIndex(where: { $0.id == delegation.id }) else { return }
+            store.delegations[index].state = state ?? Phase.pending.rawValue
+        }
+    }
+
     private func perform(
         _ id: String,
         settled: (@MainActor (Store) -> Bool)? = nil,

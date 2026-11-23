@@ -416,6 +416,19 @@ class World:
             print("takeover %s (the real daemon would open it in OpenCode Desktop)" % delegation_id, flush=True)
             return 202, {"ok": True}
 
+    def handback(self, delegation_id):
+        with self.lock:
+            d = self._find(delegation_id)
+            if not d:
+                return 404, {"error": self.t["err_delegation"]}
+            if d["state"] != "taken_over":
+                return 409, {"error": "not taken over"}
+            d["state"] = "running"  # the real daemon goes to pending and wakes the PM
+            d["handbacks"] = d.get("handbacks", 0) + 1
+            d["updated_at"] = now_ms()
+            print("handback %s" % delegation_id, flush=True)
+            return 202, {"ok": True, "state": "pending"}
+
 
 def make_handler(world, token):
     t = world.t
@@ -478,6 +491,8 @@ def make_handler(world, token):
                 self._send(*world.close(parts[2], body))
             elif len(parts) == 4 and parts[:2] == ["api", "delegations"] and parts[3] == "takeover":
                 self._send(*world.takeover(parts[2]))
+            elif len(parts) == 4 and parts[:2] == ["api", "delegations"] and parts[3] == "handback":
+                self._send(*world.handback(parts[2]))
             else:
                 self._send(404, {"error": t["err_route"]})
 

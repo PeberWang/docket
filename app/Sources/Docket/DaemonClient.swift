@@ -65,6 +65,12 @@ final class DaemonClient {
         _ = try await send("POST", "/api/delegations/\(escaped(delegationID))/takeover", json: [:])
     }
 
+    /// Returns the state the daemon put the handoff in: `pending`, or `awaiting` when a card was left waiting.
+    func handback(delegationID: String) async throws -> String? {
+        let data = try await send("POST", "/api/delegations/\(escaped(delegationID))/handback", json: [:])
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["state"] as? String
+    }
+
     private func escaped(_ id: String) -> String {
         id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id
     }

@@ -54,7 +54,12 @@ delegation goes to `pending`/`running`; the next `GET /api/state` reflects it.
 `POST /api/delegations/<id>/close` body `{"reply": "optional"}` → 202.
 `POST /api/delegations/<id>/takeover` → 202. The daemon marks it `taken_over` and asks
 OpenCode Desktop to open the session. The app should also hide nothing else; a taken-over
-delegation stays listed with a single "Open in OpenCode" button that calls the same endpoint.
+delegation stays listed (for a week) with "Open in OpenCode", which calls the same endpoint,
+and "Hand back".
+`POST /api/delegations/<id>/handback` → `202 {"ok": true, "state": "pending" | "awaiting"}`.
+Only from `taken_over`, otherwise 409. The PM is woken to carry on; rounds are not reset,
+`handbacks` in `GET /api/state` counts how often it happened. The app sets the returned
+state locally at once, then refreshes.
 
 Errors: JSON `{"error": "…"}` with 4xx/5xx. If the daemon is unreachable, show a quiet
 "Docket service isn’t running" line instead of cards.

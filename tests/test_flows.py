@@ -449,6 +449,111 @@ class Flows(unittest.TestCase):
             self.docket.maybe_register("ses_new", attempts=1)
         return self.docket.delegation("ses_new")
 
+    # ---------- handing a taken-over handoff back ----------
+
+    def take_over(self):
+        self.docket.takeover("ses_x")
+        self.assertEqual(self.state(), "taken_over")
+
+    def handbacks(self):
+        return self.docket.delegation("ses_x")["handbacks"]
+
+    def test_a_taken_over_handoff_can_be_handed_back(self):
+        self.answers.append({"action": "relay", "message": "go on"})
+        self.docket.decide(self.awaiting_card(), {}, "go")
+        self.take_over()
+        # While taken over the docket asks nothing: a run ending in the user's own session writes no card.
+        self.docket.on_run_end("ses_x", "succeeded")
+        self.assertEqual(self.state(), "taken_over")
+        seen = []
+        pm.ask = lambda key, message, validate, record=None: seen.append(message) or self.answers.pop(0)
+        self.answers.append({"action": "relay", "message": "next piece"})
+        self.assertEqual(self.docket.handback("ses_x"), "pending")
+        self.assertIn("handed it back", seen[0])
+        self.assertEqual(self.sent, ["go on", "next piece"])
+        self.assertEqual(self.state(), "running")
+        self.assertEqual((self.rounds(), self.handbacks()), (1, 1))  # rounds kept, not refilled
+        self.assertEqual(self.docket.relayed_count("ses_x"), 1)  # the handback's relay is not one an answer paid for
+        self.assertEqual(self.db.execute("select count(*) from events where delegation_id = 'ses_x' and kind = 'handback'").fetchone()[0], 1)
+        self.assertEqual(ledger.snapshot(self.db)[0]["handbacks"], 1)
+        # Back under the docket's care: the next run end is a card again.
+        self.answers.append(dict(CARD, progress="piece done"))
+        self.docket.on_run_end("ses_x", "succeeded", "ok")
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "piece done")
+
+    def test_a_closed_handoff_cannot_be_handed_back(self):
+        self.docket.finish("ses_x", "done")
+        self.docket.takeover("ses_x")  # taking over a closed handoff leaves it closed
+        with self.assertRaises(ValueError):
+            self.docket.handback("ses_x")
+        self.assertEqual((self.state(), self.handbacks()), ("closed", 0))
+        with self.assertRaises(ValueError):
+            self.docket.handback("ses_nope")
+
+    def test_handing_back_twice_is_refused_and_counted_once(self):
+        with self.assertRaises(ValueError):  # never taken over
+            self.docket.handback("ses_x")
+        self.take_over()
+        self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress="which way?")})
+        self.docket.handback("ses_x")
+        self.assertEqual(self.state(), "awaiting")
+        with self.assertRaises(ValueError) as refused:
+            self.docket.handback("ses_x")
+        self.assertIn("taken over", str(refused.exception))
+        self.assertEqual(self.handbacks(), 1)
+        # Taking over again and handing back again works, and is counted.
+        self.take_over()
+        self.answers.append({"action": "relay", "message": "again"})
+        self.docket.handback("ses_x")
+        self.assertEqual(self.handbacks(), 2)
+
+    def test_a_card_left_waiting_goes_up_on_handback(self):
+        shown = self.docket.show_card("ses_x", "report", dict(CARD, progress="shown"))
+        waiting = self.docket.show_card("ses_x", "report", dict(CARD, progress="waiting"))
+        self.take_over()  # resolves the card on show; the one behind it is still queued
+        self.answers.append({"action": "relay", "message": "carry on"})
+        self.assertEqual(self.docket.handback("ses_x"), "awaiting")
+        self.assertNotEqual(ledger.open_card(self.db, "ses_x")["id"], shown)
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], waiting)
+        self.assertEqual(self.sent, ["carry on"])
+        self.assertEqual(self.state(), "awaiting")  # the relay does not hide the card on show
+
+    def test_after_handback_the_limit_and_the_sweep_still_hold(self):
+        self.db.execute("update delegations set rounds = 3 where id = 'ses_x'")
+        self.docket.enter_limit("ses_x")
+        self.take_over()  # taking over is one of the two ways out of the limit
+        # The PM may not ask again: its card is refused, the limit card comes back, rounds stay at 3.
+        self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress="one more?")})
+        self.docket.handback("ses_x")
+        self.assertEqual(self.state(), "limit")
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "limit")
+        self.assertEqual(self.rounds(), 3)
+        with self.assertRaises(ValueError):
+            self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {}, "please")
+        # A handed-back handoff with an old card nobody can see is swept like any other.
+        ledger.add_delegation(self.db, id="ses_y", title="y", directory=None, source_key="k", dispatch_seq=1, dispatched_at=0, brief="", context=[])
+        self.docket.takeover("ses_y")
+        self.answers.append({"action": "relay", "message": "y on"})
+        self.docket.handback("ses_y")
+        self.assertEqual(self.docket.delegation("ses_y")["state"], "running")
+        old = ledger.add_card(self.db, "ses_y", "question", dict(CARD, progress="old"))
+        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - 3 * 3600_000, old))
+        self.docket.sweep_orphans()
+        self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
+
+    def test_a_pm_reply_after_another_takeover_is_dropped(self):
+        self.take_over()
+
+        def ask(key, message, validate, record=None):
+            self.docket.takeover("ses_x")  # the user takes it back while the PM is thinking
+            return {"action": "relay", "message": "too late"}
+
+        pm.ask = ask
+        self.docket.handback("ses_x")
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.state(), "taken_over")
+
     def test_home_variable_in_dispatch_directory_is_stored_expanded(self):
         home = Path(tempfile.mkdtemp()).resolve()
         (home / "Desktop/Code工作区/proj").mkdir(parents=True)

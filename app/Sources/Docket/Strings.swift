@@ -59,7 +59,7 @@ enum StringKey: Sendable {
     case round, queued, metaSeparator, justNow, nothingToDecide
     case recommended, handledForYou
     case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
-    case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal
+    case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal, handBack, handBackHelp
     // Menu bar
     case showDocket, hideDocket, hidePanel, showPanel, panelHidden, settings, quit
     case permissionSettings, permissionSettingsMissing, permissionSettingsFailed, ok
@@ -115,6 +115,8 @@ struct Strings: Sendable {
         .confirmClose: ("Confirm", "确认结案"),
         .openInOpenCode: ("Open in OpenCode", "在 OpenCode 打开"),
         .continueInTerminal: ("Continue in Terminal", "在终端接管"),
+        .handBack: ("Hand back", "交还"),
+        .handBackHelp: ("Give it back to the PM to carry on. Rounds already used stay used.", "交还给 PM 继续推进，已用的轮次不清零"),
 
         .showDocket: ("Show Panel", "展开面板"),
         .hideDocket: ("Collapse Panel", "收起面板"),

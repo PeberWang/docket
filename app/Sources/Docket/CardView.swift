@@ -233,7 +233,16 @@ struct CardView: View {
         case .closed:
             EmptyView()
         case .takenOver:
-            EmptyView()  // taken over: the session is yours, the panel has nothing left to offer
+            // Taken over: open the session again, or hand it back so the PM carries on.
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button(s(delegation.opensInTerminal ? .continueInTerminal : .openInOpenCode)) { store.takeover(delegation) }
+                    .buttonStyle(DocketButtonStyle(prominent: false))
+                Button(s(.handBack)) { store.handback(delegation) }
+                    .buttonStyle(DocketButtonStyle(prominent: true))
+                    .help(s(.handBackHelp))
+            }
+            .disabled(busy)
         default:
             HStack(spacing: 8) {
                 Spacer(minLength: 0)

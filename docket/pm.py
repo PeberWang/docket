@@ -165,6 +165,26 @@ def mention_wake(text: str, rounds: int) -> str:
     )
 
 
+def handback_wake(opencode_reply: str, rounds: int) -> str:
+    """The user took the handoff over and has handed it back. Short on purpose: the plan is the PM's."""
+    reply = (opencode_reply or "").strip()
+    if len(reply) > OPENCODE_CHARS:
+        reply = reply[:OPENCODE_CHARS] + "\n… (truncated)"
+    return "\n".join(
+        [
+            "The user took this handoff over in OpenCode for a while and has now handed it back to you on Docket. Handing back cost no round.",
+            "Carry on at your own pace: check where the work stands (they may have changed things), then relay the next piece to OpenCode, split long work into pieces you can verify, card only what you cannot decide, close if it is done.",
+            budget_line(rounds),
+            "",
+            f"OpenCode's last reply:\n{reply or '(no text)'}",
+            "",
+            language_line(),
+            "",
+            action_format(),
+        ]
+    )
+
+
 def wrap_up_wake(event: str, opencode_reply: str | None, rounds: int) -> str:
     """The budget is spent: no more cards, only a handoff note to close with."""
     lines = [
