@@ -38,6 +38,8 @@ DISCOVERY = ledger.HOME / "daemon.json"
 MEMORY_DIR = Path.home() / ".openclaw/workspace/memory"
 MENTION_POLL = 5
 LIVE = ("running", "pending", "awaiting")
+# What a session's outcome looks like once no run is going on any more.
+TERMINAL_OUTCOMES = ("succeeded", "failed", "interrupted")
 # OpenCode permission actions and tool names, sorted by whether they can change files.
 READ_ACTIONS = {"read", "glob", "grep", "list"}
 WRITE_ACTIONS = {"edit", "write", "patch", "apply_patch", "multiedit"}
@@ -299,6 +301,10 @@ class Docket:
             except Exception:
                 log.exception("orphan sweep failed")
             try:
+                self.sweep_awaiting()
+            except Exception:
+                log.exception("awaiting sweep failed")
+            try:
                 for row in self.db().execute("select * from delegations where state = 'running' and engine = 'opencode'").fetchall():
                     try:
                         session = Service().session(row["id"])
@@ -321,6 +327,77 @@ class Docket:
             time.sleep(60)
 
     ORPHAN_AFTER = 2 * 3600_000  # ms a card may sit unanswered where the panel cannot show it
+    AWAITING_STALE_AFTER = 30 * 60_000  # ms an awaiting card may sit after its session reached an end
+
+    def awaiting_stale_after_ms(self) -> int:
+        """AWAITING_STALE_AFTER, overridable in config.json (awaiting_stale_after_minutes)."""
+        minutes = self.settings.get("awaiting_stale_after_minutes") or self.AWAITING_STALE_AFTER // 60_000
+        return int(float(minutes) * 60_000)
+
+    def sweep_awaiting(self):
+        """A card the session has outlived must not wait forever.
+
+        Once an OpenCode session reaches a terminal outcome there is nothing left to answer
+        on the panel: the work and its conclusion are in the chat. A card on show for longer
+        than AWAITING_STALE_AFTER on such a handoff, with no PM job in flight, is closed as
+        expired so it stops asking the user to decide something that no longer runs.
+        """
+        db = self.db()
+        cutoff = ledger.now() - self.awaiting_stale_after_ms()
+        rows = db.execute(
+            "select distinct d.id from cards c join delegations d on d.id = c.delegation_id"
+            " where c.resolved_at is null and c.queued = 0 and c.created_at < ? and c.kind not in ('limit', 'closed')"
+            " and d.state = 'awaiting' and d.engine = 'opencode'",
+            (cutoff,),
+        ).fetchall()
+        for (delegation_id,) in rows:
+            if self.busy(delegation_id):
+                continue
+            with self.lock(delegation_id):
+                if self.busy(delegation_id):  # a PM job may have been submitted since the check above
+                    continue
+                row = ledger.get(db, delegation_id)
+                card = ledger.open_card(db, delegation_id)
+                if (not row or row["state"] != "awaiting" or not card
+                        or card["created_at"] >= cutoff or card["kind"] in ("limit", "closed")):
+                    continue
+                try:
+                    session = Service().session(delegation_id)
+                except Exception as error:
+                    log.info("sweep: cannot read session %s: %s", delegation_id, error)
+                    continue
+                times = session.get("time") or {}
+                if (times.get("busy") or 0) > (times.get("idle") or 0):
+                    continue  # a run is going on: the card is not outliving its session
+                outcome = session.get("outcome")
+                if outcome not in TERMINAL_OUTCOMES:
+                    continue
+                self.expire_awaiting(delegation_id, card["id"], outcome)
+
+    def expire_awaiting(self, delegation_id: str, card_id: int, outcome: str):
+        """The session ended and nobody answered: resolve the cards and close with a note."""
+        db = self.db()
+        minutes = self.settings.get("awaiting_stale_after_minutes") or self.AWAITING_STALE_AFTER // 60_000
+        after = int(float(minutes) * 60_000)
+        resolution = {"action": "auto-expired", "by": "sweep", "note": "session ended, no reply"}
+        cards = [c["id"] for c in db.execute(
+            "select id from cards where delegation_id = ? and resolved_at is null", (delegation_id,)
+        ).fetchall()]
+        for card in cards:
+            ledger.resolve_card(db, card, resolution)
+        text = self.t("auto_expired", outcome=outcome, minutes=int(minutes) if float(minutes).is_integer() else minutes)
+        ledger.add_card(db, delegation_id, "closed", {
+            "progress": text,
+            "conclusion": text,
+            "remaining": [],
+            "decisions": [],
+            "decided_for_you": [],
+            "session_outcome": outcome,
+            "auto_expired": {"by": "sweep", "outcome": outcome, "reason": "session ended, no reply", "after_ms": after},
+        })
+        ledger.log(db, delegation_id, "sweep:auto-expired", {"card": card_id, "cards": cards, "outcome": outcome, "after_ms": after})
+        ledger.set_state(db, delegation_id, "closed")
+        log.info("sweep: auto-expired card %s on %s (%s)", card_id, delegation_id, outcome)
 
     def sweep_orphans(self):
         """A card nobody can see must not hold the queue forever.

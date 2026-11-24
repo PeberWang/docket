@@ -135,6 +135,7 @@ To remove it: `bash scripts/uninstall.sh` takes out the launch agents, the app, 
 | `fallback_model` | `null` | OpenCode model (`provider/model`) to retry a run once with after a usage limit; `null` = no retry |
 | `prefix` | `""` | a title prefix your dispatcher puts on OpenCode sessions. `""` matches by title alone, and still accepts a symbols-only marker such as the inbox plugin's default emoji; a prefix with letters, like `"[oc] "`, has to be set here |
 | `reconcile_max_age_hours` | `6` | on restart, a pending handoff idle longer than this is closed as overdue instead of woken |
+| `awaiting_stale_after_minutes` | `30` | an awaiting card whose OpenCode session has ended is closed as expired after this many minutes with no reply |
 | `judge` | `{}` | `backend` (`"systemone"` or `"openai"`), `model`, `endpoint`, `keychain_service`; easier from Settings → Models |
 | `attribute` | `true` | recognise later mentions of a handoff in the chat |
 | `context_threshold` | `0.5` | how sure the judge must be to keep a message as background |

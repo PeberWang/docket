@@ -394,6 +394,70 @@ class Flows(unittest.TestCase):
         self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
         self.assertEqual(self.state(), "running")  # nothing left to show
 
+    # ---------- an awaiting card whose session has ended ----------
+
+    def stale_awaiting(self, minutes: int = 40) -> int:
+        card_id = self.awaiting_card()
+        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - minutes * 60_000, card_id))
+        return card_id
+
+    def sweep_awaiting_with(self, session: dict):
+        class Service:
+            def session(self, sid):
+                return session
+
+        daemon.Service = Service
+        self.docket.sweep_awaiting()
+
+    def test_sweep_awaiting_expires_a_card_whose_session_ended(self):
+        card = self.stale_awaiting()
+        self.sweep_awaiting_with({"outcome": "succeeded", "time": {"busy": 1, "idle": 2}})
+        row = self.db.execute("select * from cards where id = ?", (card,)).fetchone()
+        self.assertEqual(json.loads(row["resolution"]), {"action": "auto-expired", "by": "sweep", "note": "session ended, no reply"})
+        self.assertEqual(self.state(), "closed")
+        closed = self.db.execute("select * from cards where delegation_id = 'ses_x' and kind = 'closed'").fetchone()
+        body = json.loads(closed["body"])
+        self.assertEqual(body["session_outcome"], "succeeded")
+        self.assertEqual(body["auto_expired"]["reason"], "session ended, no reply")
+        event = json.loads(self.db.execute(
+            "select detail from events where delegation_id = 'ses_x' and kind = 'sweep:auto-expired'"
+        ).fetchone()[0])
+        self.assertEqual((event["card"], event["outcome"], event["cards"]), (card, "succeeded", [card]))
+        shown = next(d for d in ledger.snapshot(self.db) if d["id"] == "ses_x")
+        self.assertEqual(shown["state"], "closed")
+        self.assertEqual(shown["card"]["kind"], "closed")
+
+    def test_sweep_awaiting_leaves_a_fresh_card_alone(self):
+        card = self.stale_awaiting(minutes=5)
+        self.sweep_awaiting_with({"outcome": "succeeded", "time": {"busy": 1, "idle": 2}})
+        self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (card,)).fetchone()[0])
+        self.assertEqual(self.state(), "awaiting")
+
+    def test_sweep_awaiting_leaves_a_session_that_is_still_running(self):
+        card = self.stale_awaiting()
+        self.sweep_awaiting_with({"outcome": None, "time": {"busy": 3, "idle": 2}})
+        self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (card,)).fetchone()[0])
+        # The session is over, but a PM job of this handoff is still in flight: still no touch.
+        self.docket.jobs["ses_x"] = 1
+        self.sweep_awaiting_with({"outcome": "succeeded", "time": {"busy": 1, "idle": 2}})
+        self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (card,)).fetchone()[0])
+        self.docket.jobs["ses_x"] = 0
+        self.sweep_awaiting_with({"outcome": "succeeded", "time": {"busy": 1, "idle": 2}})
+        self.assertEqual(self.state(), "closed")
+
+    def test_sweep_awaiting_marks_an_interrupted_session_as_such(self):
+        card = self.stale_awaiting()
+        self.sweep_awaiting_with({"outcome": "interrupted", "time": {"busy": 1, "idle": 2}})
+        self.assertEqual(self.state(), "closed")
+        closed = self.db.execute("select * from cards where delegation_id = 'ses_x' and kind = 'closed'").fetchone()
+        body = json.loads(closed["body"])
+        self.assertEqual(body["session_outcome"], "interrupted")
+        self.assertIn("interrupted", body["progress"])
+        event = json.loads(self.db.execute(
+            "select detail from events where delegation_id = 'ses_x' and kind = 'sweep:auto-expired'"
+        ).fetchone()[0])
+        self.assertEqual((event["card"], event["outcome"]), (card, "interrupted"))
+
     def test_answering_shows_the_next_card_in_order(self):
         first = self.docket.show_card("ses_x", "report", dict(CARD, progress="first"))
         second = self.docket.show_card("ses_x", "report", dict(CARD, progress="second"))
