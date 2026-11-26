@@ -165,6 +165,103 @@ def mention_wake(text: str, rounds: int) -> str:
     )
 
 
+def card_lines(card: dict) -> list[str]:
+    """The card as the user saw it: its sentence, then each question with its options."""
+    lines = [f"Card: {card.get('progress') or '(no text)'}"]
+    for decision in card.get("decisions") or []:
+        options = "; ".join(f"{o['id']}) {o['label']}" for o in decision.get("options") or [])
+        lines.append(f"- {decision['id']}: {decision['question']}  Options: {options}")
+    return lines
+
+
+def basis_line() -> str:
+    return f'Add "basis" to the action: one sentence for the record, what in the user\'s words settles the card, quoting them (at most {_limits()["conclusion"]} characters).'
+
+
+def resolution_wake(mode: str, card: dict, quote: dict, choices: dict, rounds: int) -> str:
+    """The judge found the waiting card settled in the main chat: answered, or made moot.
+
+    Docket has already taken the card off the panel. An answer was the user taking part (one
+    round, already spent); the PM closes on it or relays it. A moot card was not answered,
+    so nothing may be decided on the user's behalf: close with why, or ask afresh.
+    """
+    said = f"[{quote.get('time', '')}] “{quote.get('text', '')}”"
+    lines = []
+    if mode == "answered":
+        lines += [
+            "The user answered your last card on Docket in the main chat instead of on the panel. The judge matched their message to the card, so Docket has taken the card off the panel; you do not need to ask it again.",
+            "",
+            *card_lines(card),
+            "",
+            f"The user's words, verbatim: {said}",
+        ]
+        picked = []
+        for decision in card.get("decisions") or []:
+            option = next((o for o in decision.get("options") or [] if o["id"] == choices.get(decision["id"])), None)
+            picked.append(f"- {decision['question']} → {option['label'] if option else 'their own answer, none of the options'}")
+        if picked:
+            lines += ["The judge reads it as:"] + picked
+        lines += [
+            "",
+            "Settle the card now, in this one action:",
+            "- close if the work is done or nothing is left for OpenCode; the conclusion says the user decided it in the chat and what they decided.",
+            "- relay if OpenCode must carry on: turn the user's decision into a complete instruction now, in the same action. Relay only what the user said.",
+            "- card only if their words do not actually settle the question: ask it again, more specifically.",
+            basis_line(),
+        ]
+    else:
+        lines += [
+            "The judge found that your last card on Docket no longer needs an answer: what the user wrote in the main chat after it went up shows this work went another way. Docket has taken the card off the panel.",
+            "",
+            *card_lines(card),
+            "",
+            f"The user's words, verbatim: {said}",
+            "",
+            "The user did not answer the card, so do not decide it for them and do not relay. Either close, and say in the conclusion in one sentence why the card is void; or, if something on this handoff still needs the user's call, write one new card.",
+            basis_line().replace("settles the card", "makes the card void"),
+        ]
+    lines += ["", budget_line(rounds), language_line(), "", action_format()]
+    return "\n".join(lines)
+
+
+def quiet_wake(card: dict, hours: float, expire_hours: float, rounds: int) -> str:
+    """Nobody has answered the card for hours: close it, or ask once more, never decide for the user."""
+    lines = [
+        f"Nobody has answered your last card on Docket for {hours:g} hours, and the coding agent is idle. Docket will close it on its own {expire_hours:g} hours after it went up.",
+        "",
+        *card_lines(card),
+        "",
+        "Decide now, once:",
+        "- close it as expired: the conclusion says what got done, that the question went unanswered, and what is left (in remaining).",
+        "- or replace it with one card that asks a more specific question the user can answer at a glance.",
+        "Silence is not an answer: do not relay, and do not pick an option for the user.",
+        "",
+        budget_line(rounds),
+        language_line(),
+        "",
+        action_format(),
+    ]
+    return "\n".join(lines)
+
+
+def validate_settle(mode: str):
+    """resolution_wake's and quiet_wake's actions, checked in code: no relay unless the user answered,
+    and a basis for the record whenever the judge put the card down."""
+    allowed = ("relay", "close", "card") if mode == "answered" else ("close", "card")
+
+    def validate(action) -> list[str]:
+        errors = validate_action(action)
+        if errors:
+            return errors
+        if action["action"] not in allowed:
+            errors.append(f"the user did not answer this card: reply with {' or '.join(allowed)}, never relay")
+        if mode != "quiet":
+            _short(action.get("basis"), _limits()["conclusion"], "basis", errors)
+        return errors
+
+    return validate
+
+
 # How a task brief marks what it leaves to the user. A line carrying one is a reserved item.
 RESERVED_MARKERS = ("待用户决定", "留给你定", "需要确认", "待确认", "由用户决定", "用户来定", "你来定",
                     "for the user to decide", "user decides", "your call", "needs confirmation", "to be confirmed")
@@ -472,7 +569,7 @@ def normalize(value: dict) -> dict:
     if card is not None:
         card.setdefault("decisions", [])
         card.setdefault("decided_for_you", [])
-    for key in ("card", "message", "conclusion"):
+    for key in ("card", "message", "conclusion", "basis"):
         if key in value:
             value[key] = _plain_deep(value[key])
     if "progress" in value:

@@ -207,6 +207,29 @@ def resolve_card(conn, card_id: int, resolution: dict) -> None:
     )
 
 
+def resolve_open(conn, card_id: int, resolution: dict) -> bool:
+    """Resolve a card only if nobody has yet; False when it was answered in the meantime."""
+    done = conn.execute(
+        "update cards set resolved_at = ?, resolution = ? where id = ? and resolved_at is null",
+        (now(), json.dumps(resolution, ensure_ascii=False), card_id),
+    )
+    return done.rowcount > 0
+
+
+def amend_resolution(conn, card_id: int, extra: dict) -> None:
+    """Add fields to a resolved card's resolution (the PM's basis, written after the fact)."""
+    row = conn.execute("select resolution from cards where id = ?", (card_id,)).fetchone()
+    current = json.loads(row[0]) if row and row[0] else {}
+    conn.execute("update cards set resolution = ? where id = ?", (json.dumps({**current, **extra}, ensure_ascii=False), card_id))
+
+
+def add_conclusion(conn, delegation_id: str, body: dict) -> int:
+    """The closed card: a record of the ending, resolved at birth so it never counts as waiting."""
+    card_id = add_card(conn, delegation_id, "closed", body)
+    resolve_card(conn, card_id, {"action": "conclusion"})
+    return card_id
+
+
 def spend_round(conn, delegation_id: str, card_id: int | None = None, resolution: dict | None = None) -> int | None:
     """A person took part: add one round, in one transaction with resolving their card.
 
@@ -309,7 +332,7 @@ def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dic
                     "kind": last["kind"],
                     "open": last["resolved_at"] is None,
                     **{k: _clean(v) for k, v in json.loads(last["body"]).items() if k not in ("pending_relay", "pending_permission", "pm_retry", "wrap_up", "round_spent")},
-                    **({"choices": answer.get("choices") or {}, "reply": answer.get("reply") or ""} if answer else {}),
+                    **({"choices": answer.get("choices") or {}, "reply": answer.get("reply") or ""} if answer and last["kind"] != "closed" else {}),
                 }
                 if last
                 else None,

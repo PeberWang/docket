@@ -172,6 +172,107 @@ def attribute(message: dict, recent: list[dict], active: list[dict]) -> tuple[di
     )
 
 
+CARD_MESSAGES = 20  # the latest user messages after a card that are judged against it
+
+
+def card_view(card: dict) -> dict:
+    """A card as the judge sees it: what it says and what it asks, without Docket's own fields."""
+    return {
+        "progress": _clip(redact(card.get("progress") or ""), MESSAGE_CHARS),
+        "decisions": [
+            {
+                "id": d["id"],
+                "question": redact(d.get("question") or ""),
+                "options": [{"id": o["id"], "label": redact(o.get("label") or "")} for o in d.get("options") or []],
+            }
+            for d in card.get("decisions") or []
+        ],
+    }
+
+
+def card_status(task: dict, card: dict, messages: list[dict], threshold: float = 0.9, pick_min: float = 0.5) -> tuple[dict, dict]:
+    """Has the user settled a waiting card in the main chat, in the messages written after it?
+
+    `messages` are the user's main-chat messages after the card went up ({id, role, time,
+    text}, oldest first). One Choice decides the card's status (answered / superseded / open),
+    one picks the message that settles it, and one per decision reads which option the user
+    took ("other" when they said something none of the options says).
+
+    Returns ({"status", "probability", "message", "choices", "probabilities"}, usage). Code calls
+    a card answered only when the status is sure, one message is named, and every decision is
+    read; superseded needs the status and the message. Anything short of that is "open".
+    """
+    usage = {"input_tokens": 0, "requests": 0}
+    messages = [m for m in messages if m["role"] == "user"][-CARD_MESSAGES:]
+    if not messages:
+        return {"status": "open", "probability": 0.0, "message": None, "choices": {}, "probabilities": {}}, usage
+    view = card_view(card)
+    asks = bool(view["decisions"])
+    state = {"task": delegation_view(task), "card": view, "messages_after_card": _rows(messages)}
+    answered = (
+        "A message gives the user's decision on the card's question(s): it picks one of the options, or says what to do "
+        "in words that settle each question. Asking about the topic, thinking aloud, or deciding a different question is not enough."
+        if asks
+        else "A message responds to what the card reports: the user accepts the result, says it is done, or says what to do next with this work."
+    )
+    questions = {
+        "status": {
+            "type": "choice",
+            "instructions": (
+                "`card` waits on Docket for the user's answer about `task`. The user did not answer it there; `messages_after_card` "
+                "is what they wrote in the main chat after it went up. Did they settle the card there?"
+            ),
+            "criteria": {
+                "answered": answered,
+                "superseded": (
+                    "The messages show the card no longer needs an answer: this work was dropped, done another way, or replaced "
+                    "by a different plan, so none of what the card asks will be taken up."
+                ),
+                "open": "Neither: the messages do not settle the card, or they are about something else.",
+            },
+        },
+        "message": {
+            "type": "choice",
+            "instructions": "Which message in `messages_after_card` settles `card` (answers it, or makes it moot)?",
+            "criteria": {
+                **{row["id"]: f"Message `{row['id']}` settles the card." for row in state["messages_after_card"]},
+                "none": "No message settles the card.",
+            },
+        },
+    }
+    for decision in view["decisions"]:
+        questions[f"pick_{decision['id']}"] = {
+            "type": "choice",
+            "instructions": f"In `messages_after_card`, which option did the user take for the card's decision `{decision['id']}` ({decision['question']})?",
+            "criteria": {
+                **{o["id"]: f"The user chose option `{o['id']}`: {o['label']}." for o in decision["options"]},
+                "other": "The user decided this question, but with something none of the options says.",
+                "none": "The messages do not decide this question.",
+            },
+        }
+    result = backend.ask(state, questions)
+    usage = {"input_tokens": result.get("usage", {}).get("input_tokens", 0), "requests": 1}
+    answers = result["answers"]
+    status = answers["status"]
+    probabilities = {"status": status.get("probabilities", {}), "message": answers["message"].get("probabilities", {})}
+    out = {"status": "open", "probability": status.get("probabilities", {}).get(status.get("choice"), 0.0), "message": None, "choices": {}, "probabilities": probabilities}
+    choice = status.get("choice")
+    named = answers["message"].get("choice")
+    if choice not in ("answered", "superseded") or out["probability"] < threshold:
+        return out, usage
+    if named in (None, "none") or answers["message"].get("probabilities", {}).get(named, 0) < pick_min:
+        return out, usage
+    choices = {}
+    if choice == "answered":
+        for decision in view["decisions"]:
+            pick = answers[f"pick_{decision['id']}"]
+            probabilities[f"pick_{decision['id']}"] = pick.get("probabilities", {})
+            if pick.get("choice") in (None, "none") or pick.get("probabilities", {}).get(pick["choice"], 0) < pick_min:
+                return out, usage  # a decision left unread: the card is not settled
+            choices[decision["id"]] = pick["choice"]
+    return {**out, "status": choice, "message": named, "choices": choices}, usage
+
+
 def should_move(answer: dict, threshold: float = 0.85, new_work_max: float = 0.5) -> bool:
     """Move a main-thread message into a delegation only when Jev is sure on every axis."""
     choice = answer.get("choice")

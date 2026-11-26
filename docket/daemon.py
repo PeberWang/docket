@@ -67,6 +67,9 @@ class Docket:
         db = self.db()
         if not db.execute("select value from kv where key = 'installed_at'").fetchone():
             db.execute("insert into kv values ('installed_at', ?)", (str(ledger.now()),))
+        # The first run of a docket that looks after unanswered cards: their clocks never start earlier.
+        db.execute("insert or ignore into kv values ('stale_since', ?)", (str(ledger.now()),))
+        self.stale_since = int(db.execute("select value from kv where key = 'stale_since'").fetchone()[0])
 
     # ---------- plumbing ----------
 
@@ -184,7 +187,7 @@ class Docket:
         ledger.set_state(self.db(), delegation_id, "awaiting" if nxt else "running")
 
     # Jobs a failure card can run again: their arguments are plain strings, kept in the card.
-    RETRYABLE = ("write_card", "act", "wrap_up", "relay")
+    RETRYABLE = ("write_card", "act", "wrap_up", "relay", "settle_card", "quiet_wake")
 
     def fail_card(self, delegation_id: str, message: str, job=None, args=(), error: str | None = None):
         """The docket's own failure: a card that stays open with a retry. It never closes the handoff."""
@@ -305,6 +308,10 @@ class Docket:
             except Exception:
                 log.exception("awaiting sweep failed")
             try:
+                self.sweep_stale()
+            except Exception:
+                log.exception("stale sweep failed")
+            try:
                 for row in self.db().execute("select * from delegations where state = 'running' and engine = 'opencode'").fetchall():
                     try:
                         session = Service().session(row["id"])
@@ -386,7 +393,7 @@ class Docket:
         for card in cards:
             ledger.resolve_card(db, card, resolution)
         text = self.t("auto_expired", outcome=outcome, minutes=int(minutes) if float(minutes).is_integer() else minutes)
-        ledger.add_card(db, delegation_id, "closed", {
+        ledger.add_conclusion(db, delegation_id, {
             "progress": text,
             "conclusion": text,
             "remaining": [],
@@ -430,6 +437,228 @@ class Docket:
                     ledger.set_state(db, delegation_id, "awaiting")
                 else:
                     self.advance(delegation_id)
+
+    # ---------- cards nobody answers on the panel ----------
+
+    def minutes_ms(self, name: str) -> int:
+        value = self.settings.get(name)
+        return int(float(value if value is not None else docket_config.DEFAULTS[name]) * 60_000)
+
+    def sweep_stale(self):
+        """A card must not keep asking a question nobody is going to answer on the panel.
+
+        On each awaiting handoff, with the coding agent idle and no PM job in flight, the card
+        on show leaves the panel one of three ways, tried in this order:
+          1. the user settled it in the main chat: the judge reads what they wrote after the card
+             (relevance.card_status); its PM closes on the answer or relays it, or says why a
+             card made moot is void;
+          2. nobody answered for quiet_expire_minutes: the docket closes it itself, noted as expired;
+          3. nobody answered for quiet_wake_minutes: its PM is woken once, to close it or ask more
+             specifically. Silence never picks an option for the user.
+        The clocks start at the card (a re-asked card keeps the first one's) and never before
+        stale_since. Permission requests are left alone: OpenCode waits on them, and a run's end expires them.
+        """
+        if not self.settings.get("stale_enabled"):
+            return
+        rows = self.db().execute(
+            "select distinct d.id from cards c join delegations d on d.id = c.delegation_id"
+            " where c.resolved_at is null and c.queued = 0 and c.kind not in ('limit', 'closed') and d.state = 'awaiting'"
+        ).fetchall()
+        for (delegation_id,) in rows:
+            if self.busy(delegation_id):
+                continue
+            try:
+                self.check_stale(delegation_id)
+            except Exception:
+                log.exception("stale check failed for %s", delegation_id)
+
+    def check_stale(self, delegation_id: str):
+        db = self.db()
+        row = self.delegation(delegation_id)
+        card = ledger.open_card(db, delegation_id)
+        if not row or row["state"] != "awaiting" or not card or card["kind"] in ("limit", "closed"):
+            return
+        body = json.loads(card["body"])
+        if body.get("pending_permission"):
+            return
+        # A PM's own question or report can be settled in the chat or re-asked; a relay
+        # confirmation or the docket's failure card can only expire.
+        askable = not (body.get("pending_relay") or body.get("docket_fault"))
+        waited = ledger.now() - max(int(body.get("quiet_since") or card["created_at"]), self.stale_since)
+        expire = waited >= self.minutes_ms("quiet_expire_minutes")
+        wake = askable and waited >= self.minutes_ms("quiet_wake_minutes") and not body.get("quiet_woken") \
+            and not db.execute("select 1 from kv where key = ?", (f"quiet_woken:{card['id']}",)).fetchone()
+        chat = self.chat_after(row, card) if askable else []
+        if not (chat or expire or wake):
+            return
+        if self.session_busy(row) is not False:
+            return  # a run is going on, or its state cannot be read: the card is not outliving anything
+        verdict = self.judge_card(row, card, body, chat) if chat else None
+        job = None
+        with self.lock(delegation_id):
+            current = ledger.open_card(db, delegation_id)
+            if self.busy(delegation_id) or not current or current["id"] != card["id"] or ledger.get(db, delegation_id)["state"] != "awaiting":
+                return  # answered, or a PM job started, while the judge was reading
+            if verdict and verdict["status"] != "open":
+                job = self.take_settled(delegation_id, card, verdict)
+            elif expire:
+                self.quiet_expire(delegation_id, card["id"], waited)
+            elif wake:
+                db.execute("insert or replace into kv values (?, ?)", (f"quiet_woken:{card['id']}", str(ledger.now())))
+                ledger.log(db, delegation_id, "stale:quiet-wake", {"card": card["id"], "after_ms": waited})
+                job = (self.quiet_wake, (delegation_id, card["id"]))
+        if job:  # submitted outside the lock: the job takes it itself
+            self.submit(delegation_id, job[0], *job[1])
+
+    def session_busy(self, row: dict) -> bool | None:
+        """Is the coding agent at work on this handoff? None when its state cannot be read."""
+        if isinstance(self.engine(row), engines.Cli):
+            return bool(self.db().execute("select 1 from runs where delegation_id = ? and finished_at is null", (row["id"],)).fetchone())
+        try:
+            session = Service().session(row["id"])
+        except Exception as error:
+            log.info("stale: cannot read session %s: %s", row["id"], error)
+            return None
+        times = session.get("time") or {}
+        return (times.get("busy") or 0) > (times.get("idle") or 0)
+
+    def chat_after(self, row: dict, card) -> list:
+        """The user's main-chat messages after the card went up, if any is new since the judge last read them.
+
+        Empty when there is nothing to judge: the judge is off, attribution is off, the handoff
+        has no source chat, or the transcript cannot be read (the mention poll reports that).
+        """
+        if not (self.settings.get("attribute") and self.judging and row.get("source_key")):
+            return []
+        try:
+            conn = openclaw_connect()
+        except transcript.Unavailable:
+            return []
+        try:
+            session_id = transcript.session_id_for(conn, row["source_key"])
+            history = transcript_messages(conn, session_id, since=card["created_at"]) if session_id else []
+        finally:
+            conn.close()
+        users = [m for m in history if m.role == "user"]
+        seen = self.db().execute("select value from kv where key = ?", (f"stale_seq:{card['id']}",)).fetchone()
+        return users if users and users[-1].seq > int(seen[0] if seen else 0) else []
+
+    @staticmethod
+    def message_view(m) -> dict:
+        return {"id": f"m{m.seq}", "role": m.role, "time": dt.datetime.fromtimestamp(m.time / 1000).strftime("%m-%d %H:%M"), "text": m.text}
+
+    def judge_task(self, row: dict) -> dict:
+        """A handoff as the judge sees it: its brief and the instructions OpenCode has been sent."""
+        relayed = [e["detail"] for e in self.db().execute("select detail from events where delegation_id = ? and kind = 'relayed' order by id", (row["id"],))]
+        return {"id": row["id"], "title": row["title"], "instruction": "", "brief": row["brief"] or "", "rounds": [json.loads(r)["message"] for r in relayed if r]}
+
+    def judge_card(self, row: dict, card, body: dict, chat: list) -> dict | None:
+        """The judge's reading of a card against the chat after it; None when it could not answer."""
+        try:
+            answer, _ = relevance.card_status(self.judge_task(row), body, [self.message_view(m) for m in chat], float(self.settings["stale_threshold"]))
+        except Exception as error:  # the judge's failure is never the sweep's: try again on the next new message
+            log.warning("stale: judge failed on card %s: %s", card["id"], error)
+            return None
+        db = self.db()
+        db.execute("insert or replace into kv values (?, ?)", (f"stale_seq:{card['id']}", str(chat[-1].seq)))
+        ledger.log(db, row["id"], "stale:judged", {"card": card["id"], **{k: answer[k] for k in ("status", "probability", "message", "choices")}})
+        if answer["status"] == "open":
+            return answer
+        said = next(m for m in chat if f"m{m.seq}" == answer["message"])
+        return {**answer, "quote": {"seq": said.seq, "at": said.time, "time": self.message_view(said)["time"], "text": said.text[:500]}}
+
+    def take_settled(self, delegation_id: str, card, verdict: dict):
+        """Under the lock: take the settled card off the panel; return the PM job that follows it."""
+        db = self.db()
+        quote = verdict["quote"]
+        answered = verdict["status"] == "answered"
+        resolution = {
+            "action": "answered-in-chat" if answered else "superseded",
+            "by": "chat-match",
+            "quote": quote["text"],
+            "seq": quote["seq"],
+            "said_at": quote["at"],
+            "probability": round(verdict["probability"], 3),
+        }
+        if answered:
+            # Answering in the chat is taking part: one round, spent with the card it answers, as a mention is.
+            resolution.update(choices=verdict["choices"], reply=quote["text"], via="chat")
+            if ledger.get(db, delegation_id)["rounds"] >= ledger.ROUND_LIMIT:
+                ledger.log(db, delegation_id, "stale:blocked", {"card": card["id"], "seq": quote["seq"]})
+                self.enter_limit(delegation_id)
+                return None
+            if ledger.spend_round(db, delegation_id, card["id"], resolution) is None:
+                return None
+        elif not ledger.resolve_open(db, card["id"], resolution):
+            return None
+        ledger.log(db, delegation_id, f"stale:{verdict['status']}", {"card": card["id"], "seq": quote["seq"], "choices": verdict["choices"], "probability": resolution["probability"]})
+        log.info("stale: card %s on %s %s in the main chat (m%s)", card["id"], delegation_id, verdict["status"], quote["seq"])
+        ledger.set_state(db, delegation_id, "pending")
+        return self.settle_card, (delegation_id, card["id"], verdict["status"])
+
+    def settle_card(self, delegation_id: str, card_id: int, mode: str):
+        """The PM closes on a card the chat settled, or relays the answer; a moot card it calls void."""
+        db = self.db()
+        row = self.delegation(delegation_id)
+        if not row or row["state"] in ("closed", "taken_over"):
+            return
+        card = db.execute("select * from cards where id = ?", (card_id,)).fetchone()
+        resolution = json.loads(card["resolution"] or "{}")
+        quote = {"text": resolution.get("quote", ""), "time": dt.datetime.fromtimestamp((resolution.get("said_at") or 0) / 1000).strftime("%m-%d %H:%M")}
+        message = pm.resolution_wake(mode, json.loads(card["body"]), quote, resolution.get("choices") or {}, row["rounds"])
+        action = self.ask_pm(row, message, pm.validate_settle(mode))
+        now = self.delegation(delegation_id)["state"]
+        if now in ("closed", "taken_over"):
+            ledger.log(db, delegation_id, "pm:dropped", {"action": action["action"], "state": now})
+            return
+        ledger.amend_resolution(db, card_id, {"basis": action.get("basis"), "settled": action["action"]})
+        ledger.log(db, delegation_id, "stale:settled", {"card": card_id, "mode": mode, "action": action["action"], "basis": action.get("basis")})
+        if action["action"] == "relay":
+            self.relay(delegation_id, action["message"], via="chat")
+        elif action["action"] == "card":
+            self.show_card(delegation_id, action["card"].get("kind", "question"), action["card"])
+        else:
+            self.finish(delegation_id, action["conclusion"], action.get("remaining"))
+        self.check_limit(delegation_id)
+
+    def quiet_wake(self, delegation_id: str, card_id: int):
+        """Nobody answered for quiet_wake_minutes: the PM closes the card or asks more specifically, once."""
+        db = self.db()
+        row = self.delegation(delegation_id)
+        card = db.execute("select * from cards where id = ?", (card_id,)).fetchone()
+        if not row or row["state"] in ("closed", "taken_over") or not card or card["resolved_at"] is not None:
+            return
+        body = json.loads(card["body"])
+        since = max(int(body.get("quiet_since") or card["created_at"]), self.stale_since)
+        hours = round((ledger.now() - since) / 3600_000, 1)
+        message = pm.quiet_wake(body, hours, self.minutes_ms("quiet_expire_minutes") / 3600_000, row["rounds"])
+        action = self.ask_pm(row, message, pm.validate_settle("quiet"))
+        now = self.delegation(delegation_id)["state"]
+        if now in ("closed", "taken_over"):
+            ledger.log(db, delegation_id, "pm:dropped", {"action": action["action"], "state": now})
+            return
+        closing = action["action"] == "close"
+        if not ledger.resolve_open(db, card_id, {"action": "expired" if closing else "superseded", "by": "quiet-wake"}):
+            # The user answered while the PM was thinking: their answer stands, the PM's goes.
+            ledger.log(db, delegation_id, "stale:dropped", {"card": card_id, "action": action["action"]})
+            return
+        ledger.log(db, delegation_id, "stale:quiet-settled", {"card": card_id, "action": action["action"]})
+        if closing:
+            self.finish(delegation_id, action["conclusion"], action.get("remaining"))
+        else:
+            # The new question keeps the first one's clock and is not woken for again.
+            self.show_card(delegation_id, action["card"].get("kind", "question"), {**action["card"], "quiet_since": since, "quiet_woken": True})
+        self.check_limit(delegation_id)
+
+    def quiet_expire(self, delegation_id: str, card_id: int, waited: int):
+        """Under the lock: nobody answered for quiet_expire_minutes. The docket closes it and says so."""
+        db = self.db()
+        note = {"by": "quiet-expiry", "reason": "no reply", "after_ms": waited}
+        if not ledger.resolve_open(db, card_id, {"action": "auto-expired", **note}):
+            return
+        ledger.log(db, delegation_id, "stale:quiet-expired", {"card": card_id, "after_ms": waited})
+        log.info("stale: card %s on %s unanswered for %d hours, closed", card_id, delegation_id, waited // 3600_000)
+        self.finish(delegation_id, self.t("quiet_expired", hours=round(waited / 3600_000)), extra={"auto_expired": note})
 
     def watch_runs(self):
         db = self.db()
@@ -803,13 +1032,15 @@ class Docket:
         separator = "；" if self.locale == "zh" else "; "
         return f"{conclusion} {self.t('remaining', items=separator.join(items))}"
 
-    def finish(self, delegation_id: str, conclusion: str, remaining: list | None = None):
-        """The only way a handoff closes: the PM judged it done, the user closed it, or the budget ran out."""
+    def finish(self, delegation_id: str, conclusion: str, remaining: list | None = None, extra: dict | None = None):
+        """The only way a handoff closes: the PM judged it done, the user closed it, the budget ran out,
+        or nobody answered its card for quiet_expire_minutes (`extra` then says so on the closed card)."""
         row = self.delegation(delegation_id)
         conclusion = self.conclusion_text(conclusion, remaining)
         for card in self.db().execute("select id from cards where delegation_id = ? and resolved_at is null", (delegation_id,)).fetchall():
             ledger.resolve_card(self.db(), card["id"], {"action": "closed"})
-        ledger.add_card(self.db(), delegation_id, "closed", {"progress": conclusion, "conclusion": conclusion, "remaining": remaining or [], "decisions": [], "decided_for_you": []})
+        body = {"progress": conclusion, "conclusion": conclusion, "remaining": remaining or [], "decisions": [], "decided_for_you": []}
+        ledger.add_conclusion(self.db(), delegation_id, {**body, **(extra or {})})
         ledger.set_state(self.db(), delegation_id, "closed")
         self.write_memory(row, conclusion)
 
@@ -943,23 +1174,8 @@ class Docket:
             conn.close()
 
     def attribute(self, message, recent, live):
-        def view(m):
-            return {"id": f"m{m.seq}", "role": m.role, "time": dt.datetime.fromtimestamp(m.time / 1000).strftime("%m-%d %H:%M"), "text": m.text}
-
-        active = []
-        for row in live:
-            if row["dispatched_at"] >= message.time:
-                continue
-            rounds = [e["detail"] for e in self.db().execute("select detail from events where delegation_id = ? and kind = 'relayed' order by id", (row["id"],))]
-            active.append(
-                {
-                    "id": row["id"],
-                    "title": row["title"],
-                    "instruction": "",
-                    "brief": row["brief"] or "",
-                    "rounds": [json.loads(r)["message"] for r in rounds if r],
-                }
-            )
+        view = self.message_view
+        active = [self.judge_task(row) for row in live if row["dispatched_at"] < message.time]
         if not active:
             return
         answer, _ = relevance.attribute(view(message), [view(m) for m in recent], active)
@@ -1132,6 +1348,16 @@ class Docket:
             "where c.resolved_at is null and d.state = 'closed' and c.kind != 'closed'"
         ).fetchall():
             ledger.resolve_card(self.db(), card["id"], {"action": "closed"})
+        # Closed cards an older build left unresolved: records of an ending, never cards that wait.
+        conclusions = self.db().execute(
+            "select c.id from cards c join delegations d on d.id = c.delegation_id "
+            "where c.resolved_at is null and d.state = 'closed' and c.kind = 'closed'"
+        ).fetchall()
+        for card in conclusions:
+            ledger.resolve_card(self.db(), card["id"], {"action": "conclusion", "note": "reconcile"})
+        if conclusions:
+            ledger.log(self.db(), None, "reconcile:conclusions", {"cards": len(conclusions)})
+            log.info("reconcile: resolved %d closed cards an older build left open", len(conclusions))
         self.close_overdue()
         installed = int(self.db().execute("select value from kv where key = 'installed_at'").fetchone()[0])
         try:

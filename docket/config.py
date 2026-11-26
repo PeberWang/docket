@@ -17,6 +17,13 @@
   "reconcile_max_age_hours": 6, // on restart a pending handoff idle longer than this is closed as overdue, not woken
   "awaiting_stale_after_minutes": 30, // an awaiting card whose OpenCode session has ended is closed
                                 // as expired after this many minutes with no reply
+  "stale_enabled": true,        // look after cards nobody answers on the panel (the three settings below); false = off
+  "stale_threshold": 0.9,       // judge: a card counts as answered (or made moot) in the main chat only at or
+                                // above this; then its PM closes it, or relays the user's words to OpenCode
+  "quiet_wake_minutes": 180,    // a card unanswered this long, with the session idle, wakes its PM once:
+                                // close it, or ask one more specific question instead
+  "quiet_expire_minutes": 1440, // a card unanswered this long is closed by the docket itself, noted as expired;
+                                // both clocks start no earlier than the first run of a docket that has them
   "judge": {                    // the model that picks a card's background and attributes main-thread messages
                                 // with no key it is off: cards still register, without background or attribution
     "backend": "systemone",     // "systemone" (TypeSafe System One, probabilities) | "openai" (any OpenAI-compatible endpoint)
@@ -45,7 +52,7 @@ from judge.transcript import canonical_key
 log = logging.getLogger("docket")
 
 PATH = HOME / "config.json"
-DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "awaiting_stale_after_minutes": 30, "judge": {}}
+DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "awaiting_stale_after_minutes": 30, "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 1440, "judge": {}}
 # What the settings window may change; everything else in the file is kept as it is.
 EDITABLE = ("pm_model", "pm_fallback_model", "judge")
 JUDGE_KEYS = ("backend", "model", "endpoint", "keychain_service")
