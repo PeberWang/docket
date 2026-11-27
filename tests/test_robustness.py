@@ -110,7 +110,11 @@ class FakeConn:
         pass
 
 
-class Robustness(unittest.TestCase):
+class Watched(unittest.TestCase):
+    """One handoff the watchdog follows, OpenCode and the PM faked; `mode` is its "watchdog" setting."""
+
+    mode = "act"
+
     def setUp(self):
         self.clock = [T0]
         self.world = world = World(self.clock)
@@ -169,6 +173,7 @@ class Robustness(unittest.TestCase):
         daemon.ledger.DB = self.tmp / "docket.sqlite"
         ledger.connect.__defaults__ = (daemon.ledger.DB,)
         self.docket = daemon.Docket()
+        self.docket.settings["watchdog"] = self.mode
         # The real job path, failure cards and all, run at once instead of on a worker thread.
         self.docket.submit = lambda did, job, *args: self.docket.run_job(did, job, args)
         self.db = self.docket.db()
@@ -233,6 +238,10 @@ class Robustness(unittest.TestCase):
         self.clock[0] += 3000
         self.world.pm_say("assistant", json.dumps(action, ensure_ascii=False))
         return self.clock[0]
+
+
+class Robustness(Watched):
+    """The watchdog acting ("watchdog": "act"): it sends again, stops quiet runs and stalls on a card."""
 
     def test_1_orphan_relay_is_carried_out_the_dockets_way_within_two_minutes(self):
         self.relay("first piece")  # the docket's own wake: in the PM transcript, never an orphan
@@ -559,6 +568,99 @@ class Robustness(unittest.TestCase):
         report = json.loads((self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.json").read_text(encoding="utf-8"))
         self.assertEqual((report["stuck"], report["healed"], report["needed_a_person"]), (2, 1, 1))
         self.assertIn("needed a person: 1", (self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.md").read_text(encoding="utf-8"))
+
+
+class ObserveMode(Watched):
+    """The default ("watchdog": "observe"): the watchdog says what it would do and leaves it to the PM and the user."""
+
+    mode = "observe"
+
+    def observed(self):
+        return [(e["would"], e["why"]) for e in self.events("watchdog:observed")]
+
+    def test_the_default_is_observe(self):
+        self.assertEqual(daemon.docket_config.DEFAULTS["watchdog"], "observe")
+
+    def test_an_instruction_that_never_shows_up_is_noted_once_and_never_sent_again(self):
+        self.on_resume = ["die"]
+        self.relay("build the three views")
+        for _ in range(10):  # five minutes of heartbeats
+            self.tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.observed(), [("send it again", "not started")])
+        self.assertEqual(self.events("watchdog:not-started"), [])
+        self.assertEqual(self.world.requests, [])  # nothing aborted
+        self.assertIsNone(self.db.execute("select ended_at from turns where delegation_id = 'ses_x'").fetchone()[0])
+        day = time.localtime(self.clock[0] / 1000)
+        import datetime as dt
+        when = dt.date(day.tm_year, day.tm_mon, day.tm_mday)
+        self.docket.write_health(when)
+        report = json.loads((self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["observed"], 1)
+
+    def test_a_quiet_run_is_noted_once_and_left_running(self):
+        self.relay()
+        self.tick()
+        self.assertEqual(self.row()["phase"], "running")
+        for _ in range(40):  # twenty minutes without a message or a changed file
+            self.tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.observed(), [("stop it and send it again in a new session", "quiet")])
+        self.assertNotIn(("POST", "/api/session/ses_x/abort"), self.world.requests)
+        self.assertEqual(self.row()["phase"], "running")
+
+    def test_an_interrupted_run_gets_the_pms_card_as_before_the_watchdog(self):
+        self.relay("build it")
+        self.tick()
+        self.world.end("ses_x", "interrupted")
+        self.answers.append(dict(CARD, kind="failure", progress="the run was stopped halfway"))
+        self.docket.handle({"type": "session.execution.interrupted", "data": {"sessionID": "ses_x"}})
+        self.assertEqual(len(self.sent), 1)  # not sent again
+        _, body = self.open_card_body()
+        self.assertEqual(body["progress"], "the run was stopped halfway")
+        self.assertEqual(self.row()["state"], "awaiting")
+        self.assertEqual(self.observed(), [("send it again", "interrupted")])
+
+    def test_the_end_of_a_turn_that_looks_unconfirmed_still_reaches_the_pm(self):
+        """A turn looks unconfirmed when its message scrolled out of the newest ten and the started event was missed."""
+        self.relay("build it")
+        for _ in range(12):
+            self.world.work("ses_x")
+        self.world.end("ses_x", "succeeded")
+        self.answers.append(dict(CARD, progress="built"))
+        self.docket.on_run_end("ses_x", "succeeded", "done", session="ses_x")
+        _, body = self.open_card_body()
+        self.assertEqual(body["progress"], "built")
+        self.assertEqual(self.events("turn:stale-end"), [])
+        self.assertEqual(self.observed(), [("ignore this run end", "unconfirmed end")])
+
+    def test_a_send_that_fails_shows_a_failure_card_at_once(self):
+        def broken(engine, handoff, text, model=None):
+            raise RuntimeError("opencode is not installed")
+
+        with mock.patch.object(engines.OpenCode, "resume", broken):
+            self.relay("build it")
+        _, body = self.open_card_body()
+        self.assertTrue(body["docket_fault"])
+        self.assertIn("opencode is not installed", body["progress"])
+        self.assertEqual(body["pm_retry"]["job"], "act")
+        self.assertEqual(self.row()["state"], "awaiting")
+        self.assertEqual(self.db.execute("select outcome from turns").fetchone()[0], "send_failed")
+
+    def test_a_stray_pm_answer_waits_on_a_card_instead_of_running(self):
+        self.relay("first piece")
+        self.world.end("ses_x", "succeeded")
+        self.answers.append(dict(CARD, progress="first piece done"))
+        self.docket.on_run_end("ses_x", "succeeded", "done", session="ses_x")
+        self.tick()
+        self.sent.clear()
+        self.inject_orphan({"action": "relay", "message": "continue: the three views"})
+        self.until(lambda: self.events("orphan:found"), 120)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.events("orphan:executed"), [])
+        waiting = [json.loads(r[0]) for r in self.db.execute("select body from cards where delegation_id = 'ses_x' and resolved_at is null")]
+        self.assertEqual(waiting[0]["progress"], "first piece done")  # the user's card stays up
+        self.assertTrue(any(b.get("orphan") for b in waiting))  # the stray answer waits behind it, to be decided
 
 
 class TranscriptKeys(unittest.TestCase):

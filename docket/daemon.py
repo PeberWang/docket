@@ -89,6 +89,20 @@ class Docket:
     def judging(self) -> bool:
         return backend.available()
 
+    @property
+    def acting(self) -> bool:
+        """The watchdog sends instructions again and stalls them ("watchdog": "act"); otherwise it only observes."""
+        return self.settings.get("watchdog") == "act"
+
+    def observe(self, delegation_id: str, turn, would: str, why: str, **detail):
+        """Observe mode: what the watchdog would have done, logged once per turn and reason (watchdog:observed)."""
+        if ledger.claim(self.db(), f"observed:{turn['id']}:{why}"):
+            ledger.log(self.db(), delegation_id, "watchdog:observed", {"turn": turn["id"], "attempt": turn["attempt"], "would": would, "why": why, **detail})
+            log.info("watchdog (observing): %s would %s (%s)", delegation_id, would, why)
+
+    def was_observed(self, turn_id: int, why: str) -> bool:
+        return bool(self.db().execute("select 1 from kv where key = ?", (f"observed:{turn_id}:{why}",)).fetchone())
+
     def reload_settings(self, force: bool = False) -> bool:
         """Pick up config.json when it changed: the PM's models and the judge apply from the next call.
 
@@ -593,6 +607,10 @@ class Docket:
                 ledger.end_turn(db, old["id"], "superseded")
             ledger.log(db, delegation_id, "turn:send-failed", {"turn": turn, "error": error, "attempt": attempt})
             log.warning("send to %s failed: %s", delegation_id, error)
+            if not self.acting:
+                # Nobody sends it again while the watchdog only observes: the failure shows on a card at once.
+                ledger.end_turn(db, turn, "send_failed")
+                raise RuntimeError(error)
         else:
             turn = self.track(delegation_id, session, message, via, attempt=attempt, parent=parent, run=run)
         ledger.set_state(db, delegation_id, "running")
@@ -646,6 +664,8 @@ class Docket:
                 return
             if seen is None and not self.unreachable_too_long(row["id"]):
                 return  # cannot read OpenCode at all: never resend blind until that has lasted a grace period
+            if not self.acting:
+                return self.observe(row["id"], turn, "send it again", "not started", after_ms=now - turn["started_at"])
             if not ledger.end_turn(db, turn["id"], "not_started"):
                 return
             ledger.log(db, row["id"], "watchdog:not-started", {"turn": turn["id"], "attempt": turn["attempt"], "after_ms": now - turn["started_at"]})
@@ -658,12 +678,16 @@ class Docket:
             db.execute("update turns set last_activity = ? where id = ?", (now, turn["id"]))
             return
         last = turn["last_activity"] or turn["confirmed_at"]
-        activity = self.turn_activity(row, turn, look_at_files=now - last >= QUIET_AFTER // 2)
+        # Once a quiet turn has been noted in observe mode, its project is not walked every heartbeat.
+        quiet_noted = not self.acting and self.was_observed(turn["id"], "quiet")
+        activity = self.turn_activity(row, turn, look_at_files=not quiet_noted and now - last >= QUIET_AFTER // 2)
         if activity and activity > last:
             db.execute("update turns set last_activity = ? where id = ?", (activity, turn["id"]))
             return
         if now - last < QUIET_AFTER:
             return
+        if not self.acting:
+            return self.observe(row["id"], turn, "stop it and send it again in a new session", "quiet", quiet_ms=now - last)
         if not ledger.end_turn(db, turn["id"], "quiet"):
             return
         ledger.log(db, row["id"], "watchdog:quiet", {"turn": turn["id"], "attempt": turn["attempt"], "quiet_ms": now - last})
@@ -972,16 +996,17 @@ class Docket:
         if not latest:
             # Asked from outside, answered without an action: the docket asks the PM again, its own way.
             text = found[-1]["text"]
-            if text and state not in ("closed", "limit", "taken_over"):
+            if text and state not in ("closed", "limit", "taken_over") and self.acting:
                 ledger.log(db, row["id"], "orphan:rewake", {"seq": found[-1]["seq"]})
                 ledger.set_state(db, row["id"], "pending")
                 return (self.act, row["id"], pm.note_wake(text, found[-1]["source"], row["rounds"]), None, "orphan")
-            ledger.log(db, row["id"], "orphan:ignored", {"seq": found[-1]["seq"], "state": state})
+            ledger.log(db, row["id"], "orphan:ignored", {"seq": found[-1]["seq"], "state": state, **({} if self.acting else {"observing": True})})
             return None
         action = latest["action"]
         # A relay into a session still at work (or one that cannot be read) could cross another run.
         crossing = action["action"] == "relay" and self.session_busy(row) is not False
-        if state in ("closed", "limit", "pending") or crossing:
+        # Observing, a stray answer is never carried out on its own: a person decides on the card.
+        if state in ("closed", "limit", "pending") or crossing or not self.acting:
             # Ended, at the limit, or OpenCode is still at work: a person decides, on a card that says what happened.
             summary = action.get("message") or action.get("conclusion") or (action.get("card") or {}).get("progress") or ""
             ledger.set_phase(db, row["id"], "stalled", orphan=latest["seq"])
@@ -1472,17 +1497,24 @@ class Docket:
         turn = ledger.open_turn(db, row["id"]) if run_end and event != "question" and row.get("engine") == "opencode" else None
         if turn:
             if not turn["confirmed_at"] and self.confirm_turn(row, turn) is False:
-                ledger.log(db, row["id"], "turn:stale-end", {"turn": turn["id"], "event": event})
-                return
+                if self.acting:
+                    ledger.log(db, row["id"], "turn:stale-end", {"turn": turn["id"], "event": event})
+                    return
+                # Observing: a turn can look unconfirmed only because its message scrolled out of the newest
+                # ones, so the end counts as this turn's and reaches the PM, as before the watchdog.
+                self.observe(row["id"], turn, "ignore this run end", "unconfirmed end", event=event)
             if not ledger.end_turn(db, turn["id"], event):
                 return
             ledger.log(db, row["id"], "turn:ended", {"turn": turn["id"], "outcome": event, "attempt": turn["attempt"]})
             if event in UNFINISHED and row["state"] != "limit":
-                self.expire_permissions(row["id"])
-                ledger.set_phase(db, row["id"], "awaiting_dispatch", why=event)
-                ledger.set_state(db, row["id"], "pending")
-                self.submit(row["id"], self.unfinished, row["id"], turn["id"], event, reply)
-                return
+                if self.acting:
+                    self.expire_permissions(row["id"])
+                    ledger.set_phase(db, row["id"], "awaiting_dispatch", why=event)
+                    ledger.set_state(db, row["id"], "pending")
+                    self.submit(row["id"], self.unfinished, row["id"], turn["id"], event, reply)
+                    return
+                # Observing: an unfinished run gets the PM's card, and the user decides what follows.
+                self.observe(row["id"], turn, "send it again", event)
         self.expire_permissions(session_id)
         ledger.set_state(self.db(), session_id, "pending")
         self.submit(session_id, self.write_card, session_id, event, reply)
@@ -2229,20 +2261,22 @@ def health(db, start: int, end: int) -> dict:
     stuck += [e for e in events("docket:failed") if not detail(e).get("stalled")]  # the PM's own faults
     healed = [e for e in events("turn:running") if detail(e).get("via") == "resend"] + events("orphan:auto", "orphan:folded")
     human = events("docket:failed")
+    observed = events("watchdog:observed")
     titles = {r["id"]: r["title"] for r in db.execute("select id, title from delegations")}
 
     def lines(items):
         return [{"handoff": e["delegation_id"], "title": titles.get(e["delegation_id"], ""), "at": dt.datetime.fromtimestamp(e["at"] / 1000).strftime("%H:%M:%S"),
                  "kind": e["kind"], "detail": detail(e)} for e in items]
 
-    return {"stuck": len(stuck), "healed": len(healed), "needed_a_person": len(human),
-            "details": {"stuck": lines(stuck), "healed": lines(healed), "needed_a_person": lines(human)}}
+    return {"stuck": len(stuck), "healed": len(healed), "needed_a_person": len(human), "observed": len(observed),
+            "details": {"stuck": lines(stuck), "healed": lines(healed), "needed_a_person": lines(human), "observed": lines(observed)}}
 
 
 def health_text(day, report: dict) -> str:
     out = [f"# Docket health {day:%Y-%m-%d}", "",
-           f"- stuck: {report['stuck']}", f"- healed by itself: {report['healed']}", f"- needed a person: {report['needed_a_person']}"]
-    for name, title in (("stuck", "Stuck"), ("healed", "Healed by itself"), ("needed_a_person", "Needed a person")):
+           f"- stuck: {report['stuck']}", f"- healed by itself: {report['healed']}", f"- needed a person: {report['needed_a_person']}",
+           f"- the watchdog would have acted (observe mode): {report.get('observed', 0)}"]
+    for name, title in (("stuck", "Stuck"), ("healed", "Healed by itself"), ("needed_a_person", "Needed a person"), ("observed", "Would have acted (observe mode)")):
         items = report["details"][name]
         if items:
             out += ["", f"## {title}"] + [f"- {i['at']} {i['kind']} · {i['title'] or i['handoff']} · {json.dumps(i['detail'], ensure_ascii=False)[:200]}" for i in items]
