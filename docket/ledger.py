@@ -166,19 +166,21 @@ def get(conn, delegation_id: str):
     return conn.execute("select * from delegations where id = ?", (delegation_id,)).fetchone()
 
 
-def add_delegation(conn, *, id, title, directory, source_key, dispatch_seq, dispatched_at, brief, context, engine="opencode", engine_session=None, model=None) -> None:
+def add_delegation(conn, *, id, title, directory, source_key, dispatch_seq, dispatched_at, brief, context, engine="opencode", engine_session=None, model=None, pm_agent="main") -> None:
     conn.execute(
         "insert or ignore into delegations (id, title, directory, source_key, dispatch_seq, dispatched_at, pm_key, brief, context, updated_at, engine, engine_session, model)"
         " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (id, title, directory, source_key, dispatch_seq, dispatched_at, pm_key(id), brief, json.dumps(context, ensure_ascii=False), now(), engine, engine_session or id, model),
+        (id, title, directory, source_key, dispatch_seq, dispatched_at, pm_key(id, pm_agent), brief, json.dumps(context, ensure_ascii=False), now(), engine, engine_session or id, model),
     )
     log(conn, id, "registered", {"title": title, "engine": engine})
 
 
-def pm_key(delegation_id: str) -> str:
-    # New handoffs get agent:main:docket-<id>. Handoffs registered before the rename keep the
-    # agent:main:desk-<id> stored in their row, so their PM sessions stay reachable.
-    return f"agent:main:docket-{delegation_id.removeprefix('ses_').replace('_', '-')}"
+def pm_key(delegation_id: str, agent: str = "main") -> str:
+    # With the installed PM agent (pm_agent "docket-pm") a handoff's PM is agent:docket-pm:<id>, in
+    # its own workspace and tool policy. Without it, agent:main:docket-<id>. A row keeps the key it was
+    # registered with (older ones agent:main:desk-<id>), so its PM session stays reachable.
+    short = delegation_id.removeprefix('ses_').replace('_', '-')
+    return f"agent:main:docket-{short}" if agent == "main" else f"agent:{agent}:{short}"
 
 
 def set_state(conn, delegation_id: str, state: str, force: bool = False, **fields) -> bool:

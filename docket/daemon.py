@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from docket import config as docket_config  # noqa: E402
-from docket import dispatches, engines, i18n, ledger, pm, registry, risk  # noqa: E402
+from docket import dispatches, engines, i18n, ledger, pm, registry, risk, wording  # noqa: E402
 from docket.opencode import ACTIVITY as ACTIVITY_EVENTS  # noqa: E402
 from docket.opencode import Service  # noqa: E402
 from docket.opencode import new_id as opencode_id  # noqa: E402
@@ -82,6 +82,7 @@ class Docket:
         self.run_ends: dict[str, tuple] = {}  # the newest run end per handoff whose write_card has not started yet
         pm.configure(self.locale, self.settings.get("pm_model"), self.settings.get("pm_fallback_model"))
         self.settings_guard = threading.Lock()
+        self.chat_due = threading.Event()  # set by the plugin's message tap: scan the transcript now
         db = self.db()
         if not db.execute("select value from kv where key = 'installed_at'").fetchone():
             db.execute("insert into kv values ('installed_at', ?)", (str(ledger.now()),))
@@ -420,7 +421,7 @@ class Docket:
         session = str(uuid.uuid4()) if engine.name == "claude" else None
         ledger.add_delegation(
             self.db(), id=handoff_id, title=title, directory=directory, source_key=None, dispatch_seq=None,
-            dispatched_at=ledger.now(), brief=brief, context=[], engine=engine.name, engine_session=session, model=model,
+            dispatched_at=ledger.now(), brief=brief, context=[], engine=engine.name, engine_session=session, model=model, pm_agent=self.settings.get("pm_agent", "main"),
         )
         prompt = instruction if not brief else f"{instruction}\n\n<file name=\"brief.md\">\n{brief}\n</file>"
         self.launch(handoff_id, prompt, first=True)
@@ -444,7 +445,8 @@ class Docket:
         db = self.db()
         handoff_id = opencode_id("ses", descending=True)
         ledger.add_delegation(db, id=handoff_id, title=title, directory=directory, source_key=None, dispatch_seq=None,
-                              dispatched_at=ledger.now(), brief=brief, context=[], engine="opencode", model=model)
+                              dispatched_at=ledger.now(), brief=brief, context=[], engine="opencode", model=model,
+                              pm_agent=self.settings.get("pm_agent", "main"))
         try:
             engine.open_session(self.delegation(handoff_id), f"{self.settings['prefix']}{title}")
         except Exception as error:  # nothing exists in OpenCode yet: the caller falls back to opencode-dispatch
@@ -1623,6 +1625,7 @@ class Docket:
             dispatched_at=dispatch["time"],
             brief=dispatch["brief"],
             context=context,
+            pm_agent=self.settings.get("pm_agent", "main"),
         )
         if missing:
             log.warning("dispatch directory not found for %s: %r -> %s", session_id, missing.raw, missing.expanded)
@@ -2206,6 +2209,101 @@ class Docket:
             log.debug("last reply unavailable for %s: %s", row["id"], error)
             return ""
 
+    # ---------- the OpenClaw plugin ----------
+
+    PLUGIN_SESSIONS_DAYS = 14   # handoff sessions the plugin guards against writes not from Docket
+    CONCLUSION_HOURS = 24       # a conclusion not delivered within this is left to the memory log
+
+    def openclaw_view(self) -> dict:
+        """What the plugin keeps in memory (GET /api/openclaw): the sessions it guards, the open
+        handoffs it lists for the main agent, and the conclusions it delivers back. Read-only."""
+        db = self.db()
+        since = ledger.now() - self.PLUGIN_SESSIONS_DAYS * 86400_000
+        rows = [dict(r) for r in db.execute("select * from delegations where updated_at >= ? or state != 'closed' order by updated_at desc", (since,))]
+        agent = self.settings.get("pm_agent", "main")
+        handoffs = []
+        for row in rows:
+            if row["state"] == "closed":
+                continue
+            card = ledger.open_card(db, row["id"])
+            body = json.loads(card["body"]) if card else {}
+            handoffs.append({"id": row["id"], "title": row["title"], "state": row["state"], "rounds": row["rounds"],
+                             "source": row["source_key"], "needs_you": row["state"] in ("awaiting", "limit"),
+                             "card": (wording.body(body.get("progress"), body.get("next")) or "")[:160] if card else None})
+        return {
+            "version": 1,
+            "round_limit": ledger.ROUND_LIMIT,
+            "sessions": sorted({s for r in rows if r["engine"] == "opencode" for s in (r["id"], r["engine_session"]) if s}),
+            "pm_prefixes": sorted({"agent:main:docket-", "agent:main:desk-", *([f"agent:{agent}:"] if agent != "main" else [])}),
+            "pm_sessions": sorted({r["pm_key"] for r in rows if r["pm_key"]}),
+            "handoffs": handoffs,
+            "conclusions": self.undelivered_conclusions(),
+        }
+
+    def undelivered_conclusions(self) -> list[dict]:
+        """Closings of the last day whose conclusion has not reached the chat that dispatched them.
+        One still being written by the PM (drafting) waits a few minutes for the real sentence."""
+        db = self.db()
+        out = []
+        rows = db.execute(
+            "select c.id, c.delegation_id, c.body, c.created_at, d.title, d.source_key from cards c join delegations d on d.id = c.delegation_id "
+            "where c.kind = 'closed' and c.created_at >= ? and d.source_key is not null order by c.id",
+            (ledger.now() - self.CONCLUSION_HOURS * 3600_000,)).fetchall()
+        for row in rows:
+            if db.execute("select 1 from kv where key = ?", (f"delivered:{row['id']}",)).fetchone():
+                continue
+            body = json.loads(row["body"])
+            if body.get("drafting") and ledger.now() - row["created_at"] < 5 * 60_000:
+                continue
+            out.append({"card": row["id"], "handoff": row["delegation_id"], "title": row["title"], "session": row["source_key"],
+                        "text": body.get("conclusion") or body.get("progress") or "", "at": row["created_at"]})
+        return out
+
+    def conclusions_delivered(self, cards: list) -> int:
+        """The plugin queued these conclusions into their chat's next turn: never again."""
+        db = self.db()
+        done = 0
+        for card in cards:
+            row = db.execute("select delegation_id from cards where id = ? and kind = 'closed'", (int(card),)).fetchone()
+            if row and ledger.claim(db, f"delivered:{int(card)}"):
+                ledger.log(db, row["delegation_id"], "conclusion:delivered", {"card": int(card)})
+                done += 1
+        return done
+
+    def plugin_refused(self, detail: dict):
+        """The plugin refused a tool call that would have bypassed Docket: part of the audit trail."""
+        keep = {k: str(detail.get(k) or "")[:300] for k in ("agent", "session", "tool", "rule", "command", "target")}
+        target = keep.get("target") or ""
+        row = self.delegation_for_session(target) if target.startswith("ses_") else None
+        if row is None and target.startswith("agent:"):
+            found = self.db().execute("select id from delegations where pm_key = ?", (target,)).fetchone()
+            row = self.delegation(found["id"]) if found else None
+        ledger.log(self.db(), row["id"] if row else None, "plugin:refused", keep)
+        log.info("the OpenClaw plugin refused %s from %s (%s)", keep["tool"], keep["agent"] or "?", keep["rule"])
+
+    def chat_arrived(self, session_key: str | None):
+        """A chat message reached OpenClaw (the plugin's message tap): read the transcript now."""
+        self.chat_due.set()
+
+    def supersede(self, handoff: str, by: str | None, title: str) -> str | None:
+        """desk-dispatch --supersedes: a newer handoff replaces this one, which closes with
+        "replaced by …" (a closing, section 6 of the architecture). A run still going is stopped
+        first, so two sessions never work on the same thing. Returns the closed handoff's id."""
+        row = self.find(handoff)
+        if row["id"] == by:
+            raise ValueError("a handoff cannot replace itself")
+        if row["state"] == "closed":
+            ledger.log(self.db(), row["id"], "supersede:closed", {"by": by, "title": title[:200]})
+            return None
+        for turn in self.db().execute("select * from turns where delegation_id = ? and ended_at is null", (row["id"],)).fetchall():
+            try:
+                self.stop_turn(turn)
+            except Exception as error:  # the closing stands; the run, if any, ends on its own
+                log.warning("supersede: cannot stop %s: %s", turn["session"], error)
+        ledger.log(self.db(), row["id"], "superseded", {"by": by, "title": title[:200]})
+        self.finish(row["id"], self.t("superseded_by", title=title), extra={"superseded_by": by})
+        return row["id"]
+
     # ---------- main-thread mentions ----------
 
     def watch_mentions(self):
@@ -2220,7 +2318,9 @@ class Docket:
                 self.transcript_state(error)
             except Exception:
                 log.exception("mention scan failed")
-            time.sleep(MENTION_POLL)
+            # The OpenClaw plugin says when a message arrives (chat_arrived); the poll is the fallback.
+            self.chat_due.wait(MENTION_POLL)
+            self.chat_due.clear()
 
     def transcript_state(self, error):
         """One readable line when the transcript database goes away or comes back, never a stack every poll."""
@@ -2710,6 +2810,8 @@ def serve(docket: Docket):
             if self.path == "/api/settings":
                 docket.reload_settings()
                 return self.reply(200, docket.settings_view())
+            if self.path == "/api/openclaw":
+                return self.reply(200, docket.openclaw_view())
             self.reply(404, {"error": "not found"})
 
         def do_POST(self):
@@ -2726,12 +2828,23 @@ def serve(docket: Docket):
                         return self.reply(400, {"error": "title and instruction are required"})
                     start = docket.dispatch_opencode if (body.get("engine") or "opencode") == "opencode" else (
                         lambda *a: docket.dispatch_cli(body.get("engine"), *a))
+                    if body.get("supersedes"):
+                        docket.find(body["supersedes"])  # an unknown id is refused before anything starts
                     try:
                         handoff = start(title, body.get("directory") or str(Path.home()),
                                         body.get("instruction") or "", body.get("brief") or "", body.get("model"))
                     except LookupError as error:  # desk-dispatch starts it with opencode-dispatch instead
                         return self.reply(409, {"error": str(error), "fallback": "opencode-dispatch"})
-                    return self.reply(202, {"ok": True, "id": handoff})
+                    replaced = docket.supersede(body["supersedes"], handoff, title) if body.get("supersedes") else None
+                    return self.reply(202, {"ok": True, "id": handoff, "superseded": replaced})
+                if parts == ["api", "openclaw", "delivered"]:
+                    return self.reply(200, {"ok": True, "delivered": docket.conclusions_delivered(body.get("cards") or [])})
+                if parts == ["api", "openclaw", "refused"]:
+                    docket.plugin_refused(body)
+                    return self.reply(202, {"ok": True})
+                if parts == ["api", "openclaw", "chat"]:
+                    docket.chat_arrived(body.get("session"))
+                    return self.reply(202, {"ok": True})
                 if parts[:2] == ["api", "cards"] and len(parts) == 4 and parts[3] == "decide":
                     choices = body.get("choices") or {}
                     reply = (body.get("reply") or "").strip()
@@ -2747,6 +2860,9 @@ def serve(docket: Docket):
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "note":
                     source = (body.get("source") or "panel").strip()[:80]
                     return self.reply(202, {"ok": True, **docket.note(parts[2], body.get("text") or "", source)})
+                elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "supersede":
+                    # desk-dispatch --supersedes when the new handoff was started by opencode-dispatch
+                    return self.reply(202, {"ok": True, "superseded": docket.supersede(parts[2], body.get("by"), (body.get("title") or "").strip())})
                 elif parts[:2] == ["api", "delegations"] and len(parts) == 4 and parts[3] == "retry":
                     return self.reply(202, {"ok": True, "model": docket.retry(parts[2])})
                 elif parts[:2] == ["api", "cards"] and len(parts) == 4 and parts[3] == "replay":

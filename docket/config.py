@@ -13,6 +13,8 @@
   "engine": "opencode",         // default coding agent for desk-dispatch: opencode | claude | codex
   "pm_model": null,             // model for PM sessions (openclaw agent --model); null = OpenClaw's default
   "pm_fallback_model": null,    // third try when the PM's reply failed validation twice; null = pm_model again
+  "pm_agent": "main",           // OpenClaw agent the PMs run as: "docket-pm" once the installer created it
+                                // (its own workspace and tool policy); "main" runs them in the main agent
   "fallback_model": null,       // OpenCode model ("provider/model") to retry once with after a usage limit; null = no retry
   "reconcile_max_age_hours": 6, // on restart a pending handoff idle longer than this is closed as overdue, not woken
   "continue_limit": 5,          // after a run the PM may hand OpenCode the next piece itself this many times
@@ -49,6 +51,7 @@ import fnmatch
 import json
 import logging
 import os
+import re
 
 from docket.ledger import HOME
 from judge.transcript import canonical_key
@@ -56,10 +59,13 @@ from judge.transcript import canonical_key
 log = logging.getLogger("docket")
 
 PATH = HOME / "config.json"
-DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "watchdog": "observe", "continue_limit": 5, "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 720, "judge": {}}
+DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "pm_agent": "main", "fallback_model": None, "reconcile_max_age_hours": 6, "watchdog": "observe", "continue_limit": 5, "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 720, "judge": {}}
 # What the settings window may change; everything else in the file is kept as it is.
 EDITABLE = ("pm_model", "pm_fallback_model", "judge")
 JUDGE_KEYS = ("backend", "model", "endpoint", "keychain_service")
+
+
+AGENT_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
 def load() -> dict:
@@ -71,6 +77,9 @@ def load() -> dict:
         user = {}
     merged = {**DEFAULTS}
     for name, value in user.items():
+        if name == "pm_agent" and not (isinstance(value, str) and AGENT_ID.fullmatch(value)):
+            log.warning("config.json: pm_agent = %r is not an agent id, using %r", value, DEFAULTS[name])
+            continue
         if name in DEFAULTS and not fits(DEFAULTS[name], value):
             # A mistyped setting falls back to its default instead of taking the service down.
             log.warning("config.json: %s = %r is not valid, using the default %r", name, value, DEFAULTS[name])

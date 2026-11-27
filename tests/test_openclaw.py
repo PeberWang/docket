@@ -254,7 +254,7 @@ class Daemon(unittest.TestCase):
             if polls.count(daemon.MENTION_POLL) == 3:
                 raise Stop
 
-        with mock.patch.object(daemon.time, "sleep", sleep):
+        with mock.patch.object(self.docket.chat_due, "wait", sleep):  # the poll waits on the plugin's tap
             with self.assertLogs("docket", "WARNING") as logs, self.assertRaises(Stop):
                 self.docket.watch_mentions()
         self.assertEqual(len(logs.records), 1)

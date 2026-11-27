@@ -156,7 +156,8 @@ def note(handoff: str, text: str, source: str) -> str:
         fail(f"Docket refused: {json.loads(error.read() or b'{}').get('error') or error}")
     except urllib.error.URLError as error:
         fail(f"the Docket service is not reachable: {error.reason}")
-    return f"passed on to the PM of {result['id']} (round {result['rounds']}/{ledger.ROUND_LIMIT}); see docket status {result['id']}"
+    # Passing words on costs no round; the count is the person's card answers so far.
+    return f"passed on to the PM of {result['id']} ({result['rounds']}/{ledger.ROUND_LIMIT} rounds used); see docket status {result['id']}"
 
 
 def main(argv=None):

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Hand a coding task to an agent and let OpenClaw Docket follow it.
 
-    desk-dispatch [--engine opencode|claude|codex] --title "<task name>" [-f BRIEF] [--model M] [--auto] "<instruction>"
+    desk-dispatch [--engine opencode|claude|codex] --title "<task name>" [-f BRIEF] [--model M] [--auto]
+                  [--supersedes <handoff>] "<instruction>"
 
   opencode (default)  the Docket service opens the OpenCode session itself (archived, inbox prefix) and
                       hands it the instruction; with an OpenCode older than 2.2, or the service not
                       running, `opencode-dispatch --detach` starts it instead and Docket picks it up
   claude, codex       the Docket service starts the CLI agent in the current directory and follows it
+
+--supersedes <handoff> redoes earlier work: the new handoff replaces that one, which Docket closes as
+"replaced by …" (and stops, if it still runs). Use it instead of a second handoff for the same thing.
 
 Returns as soon as the task is started. The caller gets no completion notice: Docket
 verifies the delivery, writes briefs and sends follow-ups. Follow-ups never go through
@@ -36,17 +40,17 @@ def fail(message: str, code: int = 2):
 
 
 def parse(argv):
-    options = {"engine": None, "title": None, "brief": None, "model": None, "auto": False}
+    options = {"engine": None, "title": None, "brief": None, "model": None, "auto": False, "supersedes": None}
     rest = []
     i = 0
     while i < len(argv):
         arg = argv[i]
-        if arg in ("--engine", "--title", "-f", "--file", "--model", "-m") and i + 1 < len(argv):
+        if arg in ("--engine", "--title", "-f", "--file", "--model", "-m", "--supersedes") and i + 1 < len(argv):
             key = {"-f": "brief", "--file": "brief", "-m": "model"}.get(arg, arg.lstrip("-"))
             options[key] = argv[i + 1]
             i += 2
             continue
-        if arg.startswith(("--engine=", "--title=", "--model=")):
+        if arg.startswith(("--engine=", "--title=", "--model=", "--supersedes=")):
             key, value = arg[2:].split("=", 1)
             options[key] = value
         elif arg == "--auto":
@@ -79,9 +83,46 @@ def opencode(options):
     if os.environ.get("DOCKET_DISPATCH_VIA") != "opencode-dispatch" and os.environ.get("DOCKET_DISPATCH_DRY_RUN") != "1":
         answer = ask_docket(options, "opencode", fallback_ok=True)
         if answer is not None:
-            print(f"dispatched in background: {options['title']} (handoff {answer['id']}, OpenCode). Follow-ups happen on Docket.")
+            print(f"dispatched in background: {options['title']} (handoff {answer['id']}, OpenCode){replaced(answer)}. Follow-ups happen on Docket.")
             return
+        if options["supersedes"]:  # the new session is opencode-dispatch's: the old handoff closes now
+            supersede(options)
     opencode_dispatch(options)
+
+
+def replaced(answer) -> str:
+    return f", replacing {answer['superseded']}" if answer.get("superseded") else ""
+
+
+def service_call(path, body, timeout=60):
+    """POST to the Docket service: (status, answer). status None when it is not running or not reachable."""
+    try:
+        service = json.loads((HOME / "daemon.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, {"error": "the Docket service is not running (no daemon.json)"}
+    request = urllib.request.Request(
+        service["url"] + path,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "X-Docket-Token": service["token"]},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        text = error.read().decode("utf-8", "replace")
+        try:
+            return error.code, json.loads(text)
+        except ValueError:
+            return error.code, {"error": text[:300]}
+    except urllib.error.URLError as error:
+        return None, {"error": f"the Docket service is not reachable: {error.reason}"}
+
+
+def supersede(options):
+    status, answer = service_call(f"/api/delegations/{options['supersedes']}/supersede", {"title": options["title"]})
+    if status is None or status >= 300:
+        fail(f"cannot replace {options['supersedes']}: {answer.get('error')}", 1)
 
 
 def opencode_dispatch(options):
@@ -118,31 +159,18 @@ def ask_docket(options, engine, fallback_ok=False):
         "instruction": options["instruction"] or "Follow the attached brief.",
         "brief": brief,
         "model": options["model"],
+        "supersedes": options["supersedes"],
     }
-    try:
-        service = json.loads((HOME / "daemon.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        if fallback_ok:
+    status, answer = service_call("/api/dispatch", body)
+    if status is None:
+        if fallback_ok and not options["supersedes"]:
             return None
-        fail("the Docket service is not running (no daemon.json)", 1)
-    request = urllib.request.Request(
-        service["url"] + "/api/dispatch",
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json", "X-Docket-Token": service["token"]},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as error:
-        text = error.read().decode("utf-8", "replace")
-        if fallback_ok and error.code == 409:
-            return None
-        fail(f"Docket refused: {text[:300]}", 1)
-    except urllib.error.URLError as error:
-        if fallback_ok:
-            return None
-        fail(f"the Docket service is not reachable: {error.reason}", 1)
+        fail(answer["error"], 1)
+    if status == 409 and fallback_ok and answer.get("fallback"):  # this OpenCode is started by opencode-dispatch
+        return None
+    if status >= 300:  # an unknown --supersedes id among them: nothing was started
+        fail(f"Docket refused: {answer.get('error')}", 1)
+    return answer
 
 
 def cli(options, engine):
@@ -151,7 +179,7 @@ def cli(options, engine):
                           "instruction": options["instruction"] or "Follow the attached brief."}, ensure_ascii=False))
         sys.exit(0)
     result = ask_docket(options, engine)
-    print(f"dispatched in background: {options['title']} (handoff {result['id']}, {ENGINES[engine]}). Follow-ups happen on Docket.")
+    print(f"dispatched in background: {options['title']} (handoff {result['id']}, {ENGINES[engine]}){replaced(result)}. Follow-ups happen on Docket.")
 
 
 def main():
