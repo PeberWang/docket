@@ -57,6 +57,7 @@ class PluginApi(unittest.TestCase):
         self.db = self.docket.db()
         ledger.add_delegation(self.db, id="ses_x", title="list view", directory=None, source_key="agent:main:main",
                               dispatch_seq=1, dispatched_at=0, brief="", context=[])
+        self.db.execute("insert into kv values ('plugin_since', '0')")  # the plugin is connected
 
     def state(self, handoff="ses_x"):
         return self.docket.delegation(handoff)["state"]
@@ -131,6 +132,16 @@ class PluginApi(unittest.TestCase):
         self.db.execute("update cards set created_at = ? where kind = 'closed'", (ledger.now() - 6 * 60_000,))
         [item] = self.docket.openclaw_view()["conclusions"]  # a PM that never answers: the plain one goes
         self.assertTrue(item["text"])
+
+    def test_closings_from_before_the_plugin_are_never_delivered(self):
+        self.db.execute("delete from kv where key = 'plugin_since'")  # a ledger the plugin never read
+        self.docket.finish("ses_x", "Closed before the plugin was installed.")
+        self.db.execute("update cards set created_at = created_at - 60000 where kind = 'closed'")
+        self.assertEqual(self.docket.openclaw_view()["conclusions"], [])  # the first view starts the clock
+        ledger.add_delegation(self.db, id="ses_z", title="z", directory=None, source_key="agent:main:main",
+                              dispatch_seq=3, dispatched_at=0, brief="", context=[])
+        self.docket.finish("ses_z", "Closed afterwards.")
+        self.assertEqual([c["handoff"] for c in self.docket.openclaw_view()["conclusions"]], ["ses_z"])
 
     def test_no_conclusion_goes_to_a_chat_nobody_dispatched_from(self):
         self.db.execute("update delegations set source_key = null where id = 'ses_x'")

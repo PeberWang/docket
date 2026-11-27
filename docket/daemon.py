@@ -2244,13 +2244,17 @@ class Docket:
 
     def undelivered_conclusions(self) -> list[dict]:
         """Closings of the last day whose conclusion has not reached the chat that dispatched them.
-        One still being written by the PM (drafting) waits a few minutes for the real sentence."""
+        Only closings since the plugin first asked: older ones went to the memory log alone, and
+        installing the plugin must not pour a day of old news into the chat. One still being written
+        by the PM (drafting) waits a few minutes for the real sentence."""
         db = self.db()
+        ledger.claim(db, "plugin_since")  # the first view the plugin reads starts the clock
+        since = int(db.execute("select value from kv where key = 'plugin_since'").fetchone()[0])
         out = []
         rows = db.execute(
             "select c.id, c.delegation_id, c.body, c.created_at, d.title, d.source_key from cards c join delegations d on d.id = c.delegation_id "
             "where c.kind = 'closed' and c.created_at >= ? and d.source_key is not null order by c.id",
-            (ledger.now() - self.CONCLUSION_HOURS * 3600_000,)).fetchall()
+            (max(since, ledger.now() - self.CONCLUSION_HOURS * 3600_000),)).fetchall()
         for row in rows:
             if db.execute("select 1 from kv where key = ?", (f"delivered:{row['id']}",)).fetchone():
                 continue
