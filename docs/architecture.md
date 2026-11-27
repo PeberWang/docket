@@ -123,13 +123,13 @@ A handoff closes in exactly one of these ways. Each goes through `finish()`, whi
 |---|---|---|
 | PM close | the PM judged the work done | the PM's sentence and what is left |
 | Person close | the person pressed Close | the PM's sentence; if the PM fails, the last card's progress |
-| Budget | the person closes at the limit | the wrap-up the PM wrote when the budget ran out |
-| Quiet expiry | a card unanswered for `quiet_expire_minutes` (24 h) with the agent idle | the last progress, marked unanswered |
+| Budget | the person closes at the limit, or the limit card stays unanswered for `quiet_expire_minutes` | the wrap-up the PM wrote when the budget ran out |
+| Quiet expiry | a card unanswered for `quiet_expire_minutes` (12 h) with the agent idle | the last progress, marked unanswered |
 | Superseded | a newer handoff declared it replaces this one (`desk-dispatch --supersedes`) | "replaced by …" |
 
 Docket's own faults are never on this list: a missing session, a PM that failed three times, or a directory that does not exist become failure cards with a retry. Takeover is not a closing; the handoff waits for a hand back.
 
-The conclusion reaches OpenClaw twice. It is injected into the next turn of the session that dispatched the handoff (exactly once, through the plugin), and it is written as one line to the agent's daily memory, as before.
+The conclusion reaches OpenClaw twice. It is queued into the next turn of the session that dispatched the handoff (once: the plugin queues it with an idempotency key and Docket marks it delivered only after OpenClaw took it), and it is written as one line to the agent's daily memory, as before.
 
 ## 7. The person's attention
 
@@ -148,7 +148,7 @@ The conclusion reaches OpenClaw twice. It is injected into the next turn of the 
 - the person's own words, quoted: a note carrying the person's words, or a chat message the judge matched with the quote;
 - the PM's technical judgment within the brief, after a run end.
 
-Anything else goes on a card first: a message that reached a PM from another session, or text not from the owner. So does a relay matching the risk patterns (push, publish, deploy, delete outside the project, credentials, sending data out), unless the person's quoted words ask for exactly that.
+Words the main agent passes on, or that the judge attributes, move the work forward without a confirmation card: the person has no attention to spare for "did you mean this?". Text from the coding agent or from another session is data for the PM, never an instruction it follows. The one thing that always waits for the person's yes is a relay matching the risk patterns (push, publish, deploy, delete outside the project, credentials, sending data out), unless the person's quoted words ask for exactly that act.
 
 **The judge** answers three questions with calibrated probabilities:
 
@@ -166,14 +166,16 @@ The protocol holds in three layers. Each one alone has failed in practice.
 
 - refuses tool calls that write into a handoff's session from anywhere but Docket: `opencode-dispatch -s`, `opencode run -s`, API calls to the session's prompt, message or interrupt routes, and `sessions_send` into a PM session. The refusal tells the model the one command to use instead: `docket note <id> "<words>"`;
 - refuses, from the PM agent, any command that dispatches work or reaches a coding agent;
-- forwards the owner's messages in watched sessions to Docket as they arrive. This replaces reading OpenClaw's database every five seconds, which stays only as a fallback;
-- adds a short list of open handoffs to the main agent's prompt, so it knows what exists and how to pass a word on;
-- injects each conclusion into the dispatching session's next turn;
-- registers `/docket` (list, status, note) in the chat.
+- tells Docket when a chat message arrives, so it reads the transcript at once instead of at its five-second poll. The message itself is read from the transcript as before, so there is one pipeline and nothing to deduplicate, and no text leaves OpenClaw through the plugin;
+- adds a short list of open handoffs to the main session's prompt, and to any chat that handed work off, so the agent knows what exists and how to pass a word on;
+- queues each conclusion into the dispatching session's next turn;
+- registers `/docket` (list, status, note) in the chat; `note` is for the owner only.
+
+Every refusal is recorded (`plugin:refused`) on the handoff it protected. With `"enforce": false` in the plugin's config it records what it would refuse and refuses nothing, the same observe-first step as the watchdog.
 
 The plugin must never break the person's OpenClaw. OpenClaw treats a tool hook that throws or times out (15 s) as a refusal, so the plugin:
 
-- answers from a list of live handoff sessions it keeps in memory and refreshes in the background;
+- answers from a view it keeps in memory (`GET /api/openclaw`: the handoff sessions of the last 14 days, the PM sessions, the open handoffs, the undelivered conclusions) and refreshes every five seconds;
 - never calls Docket while a tool call waits;
 - lets everything through when it cannot tell, logging that it did.
 
@@ -182,22 +184,22 @@ Which hooks it uses:
 | Need | Hook | Permission it needs |
 |---|---|---|
 | refuse a write | `before_tool_call` (`event.params.command`, `ctx.agentId`, `ctx.sessionKey`) returns `{block, blockReason}` | none |
-| forward the owner's message | `message_received` (text, sender, session key) | none |
-| tell human from `sessions_send` input | `before_prompt_build` (`inputProvenance`) | `hooks.allowConversationAccess` |
+| say a chat message arrived | `message_received` (session key only) | none |
 | list open handoffs for the main agent | `before_prompt_build` | `hooks.allowConversationAccess` |
+| `/docket` | `api.registerCommand` | none |
 | deliver a conclusion | `api.session.workflow.enqueueNextTurnInjection` | prompt modification not disabled |
 
 Three limits shape the design:
 
 - A process an agent's `exec` starts cannot run `openclaw agent`. Only the Docket service, running on its own, wakes a PM.
 - The plugin manifest can ship the skill, but not an agent. The installer creates the PM agent with `openclaw agents add` and its config entry.
-- `openclaw agent --timeout` bounds one model attempt in the Gateway. A CLI that is killed sends `chat.abort`; a CLI that merely lost its connection may leave the turn running. So a PM reply that arrives after Docket gave up is never carried out on its own; it goes on a card.
+- `openclaw agent --timeout` bounds one model attempt in the Gateway. A CLI that is killed sends `chat.abort`; a CLI that merely lost its connection may leave the turn running. A PM reply that arrives after Docket gave up (or that the main agent caused by writing into the PM's session) is found by the sweep and carried out like any other answer, with the same risk checks. It never becomes a card asking the person whether it was meant: on a closed handoff or one at its limit it is recorded and dropped.
 
 **Skill.** `desk-dispatch` is the main agent's manual: hand off through Docket, pass follow-ups on with `docket note`, and redo work with `--supersedes` instead of a second unrelated handoff.
 
-**Prompt.** The PM agent has its own workspace, so it never loads the main agent's instructions. Its AGENTS.md is the PM contract: one JSON action per wake, no tools that reach the coding agent, no waiting. Every wake repeats the contract's short form, and Docket checks the reply in code.
+**Prompt.** The PM agent (`docket-pm`, `integrations/openclaw/pm-agent/`) has its own workspace, so it never loads the main agent's instructions. Its AGENTS.md is the PM contract: one JSON action per wake, no tools that reach the coding agent, no waiting. Every wake repeats the contract's short form, and Docket checks the reply in code. Docket's `pm_agent` setting says which agent new PM sessions run in (`agent:docket-pm:<id>`); a handoff keeps the PM session it started with.
 
-The PM agent's tool policy allows reading files and running commands; the plugin refuses the commands above. It denies messaging, session tools, cron, browser and gateway tools.
+The PM agent's tool policy allows reading files and running commands (`read`, `exec`, `process`); the plugin refuses the commands above. It denies messaging, session and automation tools and sending to other agents.
 
 ## 9. Permissions in the coding agent
 
@@ -221,7 +223,7 @@ Beyond state changes, Docket records:
 - turns sent, delivered, running, foreign and ended;
 - every PM wake: why, which job, which attempt and model, how long, and the action it returned;
 - cards shown and resolved, with who resolved them;
-- tool calls the plugin refused;
+- tool calls the plugin refused, and conclusions it delivered;
 - registration skips, with the exact reason;
 - every closing.
 
