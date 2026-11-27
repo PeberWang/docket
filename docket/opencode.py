@@ -148,10 +148,7 @@ class Service:
             body["model"] = model
         result = self._request("POST", "/api/session", body)
         session = (result or {}).get("data", result) or {}
-        try:  # the inbox convention; not worth failing the handoff over
-            self._request("PATCH", f"/api/session/{session_id}", {"archived": True})
-        except Exception:
-            pass
+        self.archive(session_id)
         return session
 
     def prompt(self, session_id: str, text: str, message_id: str | None = None, metadata: dict | None = None,
@@ -167,7 +164,18 @@ class Service:
         if delivery:
             body["delivery"] = delivery
         result = self._request("POST", f"/api/session/{session_id}/prompt", body, timeout=60)
+        if metadata and "docket" in metadata:
+            # OpenCode unarchives a session that takes a prompt, and the inbox reads an unarchived
+            # session as one the person took over: Docket's own instruction keeps it archived.
+            self.archive(session_id)
         return (result or {}).get("data", result) or {}
+
+    def archive(self, session_id: str) -> bool:
+        try:  # the inbox convention; never worth failing an instruction over
+            self._request("PATCH", f"/api/session/{session_id}", {"archived": True})
+            return True
+        except Exception:
+            return False
 
     def interrupt(self, session_id: str) -> bool:
         """Stop the session's agent; False when nothing was running."""

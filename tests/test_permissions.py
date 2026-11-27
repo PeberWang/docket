@@ -130,5 +130,40 @@ class Permissions(unittest.TestCase):
         self.assertNotIn("on your behalf", self.messages[-1])
 
 
+
+class InboxConvention(unittest.TestCase):
+    """A handoff's session is "🦞 …" and archived, also after each of Docket's instructions: OpenCode
+    unarchives a session that takes a prompt (seen on 2.2.7), and the inbox would read it as taken over."""
+
+    def service(self):
+        from docket import opencode
+
+        calls = []
+        service = opencode.Service.__new__(opencode.Service)
+        service._request = lambda method, path, body=None, timeout=30: calls.append((method, path, body)) or {"data": {}}
+        return service, calls
+
+    def test_docket_instructions_keep_the_session_archived_and_others_do_not(self):
+        service, calls = self.service()
+        service.prompt("ses_x", "go", message_id="msg_1", metadata={"docket": {"turn": 1}})
+        self.assertEqual(calls[-1], ("PATCH", "/api/session/ses_x", {"archived": True}))
+        calls.clear()
+        service.prompt("ses_x", "go")  # not Docket's (no docket metadata): left as it is
+        self.assertEqual([c[0] for c in calls], ["POST"])
+
+    def test_a_new_session_is_titled_for_the_inbox(self):
+        from docket import opencode
+
+        made = []
+        real = opencode.Service
+        fake = type("S", (), {"__init__": lambda self: None, "create_session": lambda self, *a, **k: made.append(a)})
+        engines.Service = fake
+        self.addCleanup(setattr, engines, "Service", real)
+        engine = engines.OpenCode({})
+        engine.open_session({"id": "ses_x", "directory": None}, "list view")
+        engine.open_session({"id": "ses_y", "directory": None}, "🦞 already")
+        self.assertEqual([m[1] for m in made], ["🦞 list view", "🦞 already"])
+
+
 if __name__ == "__main__":
     unittest.main()
