@@ -9,6 +9,6 @@
   "openclaw": {
     "extensions": ["./index.js"],
     "compat": { "pluginApi": ">=2026.11.6" },
-    "install": { "minHostVersion": "2026.11.6" }
+    "install": { "minHostVersion": ">=2026.11.6" }
   }
 }
