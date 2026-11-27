@@ -176,6 +176,28 @@ The protocol holds in three layers. Each one alone has failed in practice.
 - injects each conclusion into the dispatching session's next turn;
 - registers `/docket` (list, status, note) in the chat.
 
+The plugin must never break the person's OpenClaw. OpenClaw treats a tool hook that throws or times out (15 s) as a refusal, so the plugin:
+
+- answers from a list of live handoff sessions it keeps in memory and refreshes in the background;
+- never calls Docket while a tool call waits;
+- lets everything through when it cannot tell, logging that it did.
+
+Which hooks it uses:
+
+| Need | Hook | Permission it needs |
+|---|---|---|
+| refuse a write | `before_tool_call` (`event.params.command`, `ctx.agentId`, `ctx.sessionKey`) returns `{block, blockReason}` | none |
+| forward the owner's message | `message_received` (text, sender, session key) | none |
+| tell human from `sessions_send` input | `before_prompt_build` (`inputProvenance`) | `hooks.allowConversationAccess` |
+| list open handoffs for the main agent | `before_prompt_build` | `hooks.allowConversationAccess` |
+| deliver a conclusion | `api.session.workflow.enqueueNextTurnInjection` | prompt modification not disabled |
+
+Three limits shape the design:
+
+- A process an agent's `exec` starts cannot run `openclaw agent`. Only the Docket service, running on its own, wakes a PM.
+- The plugin manifest can ship the skill, but not an agent. The installer creates the PM agent with `openclaw agents add` and its config entry.
+- `openclaw agent --timeout` bounds one model attempt in the Gateway. A CLI that is killed sends `chat.abort`; a CLI that merely lost its connection may leave the turn running. So a PM reply that arrives after Docket gave up is never carried out on its own; it goes on a card.
+
 **Skill.** `desk-dispatch` is the main agent's manual: hand off through Docket, pass follow-ups on with `docket note`, and redo work with `--supersedes` instead of a second unrelated handoff.
 
 **Prompt.** The PM agent has its own workspace, so it never loads the main agent's instructions. Its AGENTS.md is the PM contract: one JSON action per wake, no tools that reach the coding agent, no waiting. Every wake repeats the contract's short form, and Docket checks the reply in code.
