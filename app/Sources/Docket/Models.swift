@@ -4,6 +4,44 @@ struct DocketState: Decodable, Sendable {
     var locale: String?
     var awaiting: Int?
     var delegations: [Delegation]
+    /// Handoffs in the response this panel could not read: left out, so every other one still shows.
+    var unreadable = 0
+
+    enum CodingKeys: String, CodingKey {
+        case locale, awaiting, delegations
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        locale = try? c.decodeIfPresent(String.self, forKey: .locale)
+        awaiting = try? c.decodeIfPresent(Int.self, forKey: .awaiting)
+        let list = try c.decode(LossyList<Delegation>.self, forKey: .delegations)
+        delegations = list.items
+        unreadable = list.skipped
+    }
+}
+
+/// A list that steps past the elements it cannot read instead of failing as a whole.
+struct LossyList<Element: Decodable & Sendable>: Decodable, Sendable {
+    var items: [Element] = []
+    var skipped = 0
+
+    init(from decoder: Decoder) throws {
+        var list = try decoder.unkeyedContainer()
+        while !list.isAtEnd {
+            if let item = try? list.decode(Element.self) {
+                items.append(item)
+            } else {
+                _ = try? list.decode(Ignored.self)
+                skipped += 1
+            }
+        }
+    }
+}
+
+/// Reads as anything, so a lossy list can move past an element that failed.
+private struct Ignored: Decodable {
+    init(from decoder: Decoder) throws {}
 }
 
 struct Delegation: Decodable, Sendable, Identifiable {
@@ -73,12 +111,14 @@ struct Card: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
-        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "report"
-        open = try c.decodeIfPresent(Bool.self, forKey: .open) ?? false
-        progress = try c.decodeIfPresent(String.self, forKey: .progress)
-        decisions = try c.decodeIfPresent([Decision].self, forKey: .decisions) ?? []
-        decidedForYou = try c.decodeIfPresent([String].self, forKey: .decidedForYou) ?? []
-        conclusion = try c.decodeIfPresent(String.self, forKey: .conclusion)
+        // Everything else a card holds was written by a model: a wrong type reads as absent
+        // and never takes the card, let alone the panel, down with it.
+        kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? "report"
+        open = (try? c.decodeIfPresent(Bool.self, forKey: .open)) ?? false
+        progress = try? c.decodeIfPresent(String.self, forKey: .progress)
+        decisions = (try? c.decodeIfPresent(LossyList<Decision>.self, forKey: .decisions))?.items ?? []
+        decidedForYou = (try? c.decodeIfPresent([String].self, forKey: .decidedForYou)) ?? []
+        conclusion = try? c.decodeIfPresent(String.self, forKey: .conclusion)
         choices = try? c.decodeIfPresent([String: String].self, forKey: .choices)
         reply = try? c.decodeIfPresent(String.self, forKey: .reply)
         stalled = try? c.decodeIfPresent(Bool.self, forKey: .stalled)
@@ -90,6 +130,17 @@ struct Decision: Decodable, Sendable, Identifiable {
     var id: String
     var question: String
     var options: [Option]
+
+    enum CodingKeys: String, CodingKey {
+        case id, question, options
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        question = try c.decode(String.self, forKey: .question)
+        options = (try? c.decodeIfPresent(LossyList<Option>.self, forKey: .options))?.items ?? []
+    }
 }
 
 struct Option: Decodable, Sendable, Identifiable {
@@ -99,6 +150,18 @@ struct Option: Decodable, Sendable, Identifiable {
     var recommended: Bool?
 
     var isRecommended: Bool { recommended ?? false }
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, why, recommended
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        label = try c.decode(String.self, forKey: .label)
+        why = try? c.decodeIfPresent(String.self, forKey: .why)
+        recommended = try? c.decodeIfPresent(Bool.self, forKey: .recommended)
+    }
 }
 
 struct DaemonInfo: Decodable, Sendable {

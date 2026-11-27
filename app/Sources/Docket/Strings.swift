@@ -77,7 +77,7 @@ enum StringKey: Sendable {
     case popupNotice, popupHowTo, copySnippet, copied, dismiss
     case settingsPermissions, popupInstalled, popupMissing, popupAbout
     // Errors
-    case unreadableResponse, serviceReturned
+    case unreadableResponse, serviceReturned, someUnreadable
 }
 
 /// The one table of interface copy. English is the design language; Chinese is second.
@@ -204,6 +204,7 @@ struct Strings: Sendable {
 
         .unreadableResponse: ("Couldn’t read the service’s response", "后台返回的数据无法解析"),
         .serviceReturned: ("The service returned %d", "后台返回 %d"),
+        .someUnreadable: ("%d handoff could not be read here; the service log has the details", "有 %d 件交办在这里读不出来，详情见服务日志"),
     ]
 
     func callAsFunction(_ key: StringKey, _ args: CVarArg...) -> String {

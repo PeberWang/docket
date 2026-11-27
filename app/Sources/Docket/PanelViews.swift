@@ -128,12 +128,20 @@ struct ExpandedView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .down:
             quiet(store.s(.serviceNotRunning))
+        case .unreadable:
+            quiet(store.s(.unreadableResponse))
         case .connected:
-            if store.delegations.isEmpty {
+            if store.delegations.isEmpty && store.unreadable == 0 {
                 quiet(store.s(.noHandoffs))
             } else {
                 ScrollView {
                     VStack(spacing: 10) {
+                        if store.unreadable > 0 {
+                            Text(store.s(.someUnreadable, store.unreadable))
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         ForEach(store.delegations) { delegation in
                             CardView(store: store, delegation: delegation)
                         }

@@ -2,7 +2,8 @@ import Foundation
 import SwiftUI
 
 enum Connection {
-    case unknown, connected, down
+    /// unreadable: the service answers, but with something this panel cannot read (a newer or broken service).
+    case unknown, connected, down, unreadable
 }
 
 struct SentAnswer {
@@ -29,6 +30,8 @@ final class Store: ObservableObject {
         }
     }
     @Published private(set) var delegations: [Delegation] = []
+    /// Handoffs the last answer held that this panel could not read (shown as one line, never hidden).
+    @Published private(set) var unreadable = 0
     @Published private(set) var awaiting = 0
     @Published private(set) var connection: Connection = .unknown
     @Published private(set) var lang: Lang = LanguagePreference.saved.resolve(daemon: nil)
@@ -139,6 +142,7 @@ final class Store: ObservableObject {
             guard seq == refreshSeq else { return }
             let (shown, permissions) = Self.withoutPermissionCards(state.delegations)
             delegations = shown
+            unreadable = state.unreadable
             // Counted here rather than taken from the daemon: its count includes permission requests.
             awaiting = shown.filter { $0.phase == .awaiting || $0.phase == .limit }.count
             connection = .connected
@@ -146,9 +150,18 @@ final class Store: ObservableObject {
             daemonLang = Lang(daemonValue: state.locale)
             applyLang()
             pruneSelections()
+        } catch DocketError.unreadable {
+            guard seq == refreshSeq else { return }
+            // The service is there but its answer cannot be read: keep what was on show, and say so.
+            if connection == .connected {
+                unreadable = max(unreadable, 1)
+            } else {
+                connection = .unreadable
+            }
         } catch {
             guard seq == refreshSeq else { return }
             delegations = []
+            unreadable = 0
             awaiting = 0
             connection = .down
             daemonLang = nil

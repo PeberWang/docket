@@ -77,6 +77,68 @@ class Dimming(unittest.TestCase):
         self.assertRegex(taken, r"openInOpenCode\)\) \{[^}]*\}\s*\.buttonStyle\(DocketButtonStyle\(prominent: false\)\)")
 
 
+class Contract(unittest.TestCase):
+    """What the service's /api/state says, read by the panel's own models (audit 2026-11-27, C1)."""
+
+    @unittest.skipUnless(shutil.which("swift"), "no Swift toolchain")
+    def test_the_panel_reads_every_kind_of_handoff_and_steps_past_one_it_cannot(self):
+        import json
+        import os
+        import sys
+
+        sys.path.insert(0, str(APP.parent))
+        os.environ.setdefault("DOCKET_HOME", tempfile.mkdtemp(prefix="docket-contract-"))
+        from docket import ledger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = ledger.connect(Path(tmp) / "docket.sqlite")
+            card = {"kind": "question", "progress": "Two ways to export.", "decided_for_you": ["kept the old names"],
+                    "decisions": [{"id": "d1", "question": "Which format?", "options": [
+                        {"id": "a", "label": "CSV", "recommended": True}, {"id": "b", "label": "JSON", "recommended": "false", "why": []}]}]}
+            states = {"ses_await": ("awaiting", card), "ses_run": ("running", None), "ses_limit": ("limit", {"progress": "Budget spent."}),
+                      "ses_fault": ("awaiting", {"progress": "Docket failed.", "docket_fault": True, "stalled": True,
+                                                 "decisions": [{"id": "retry", "question": "Again?", "options": [{"id": "yes", "label": "Retry", "recommended": True}]}]}),
+                      "ses_over": ("taken_over", {"progress": "Yours now.", "decided_for_you": "not a list"}),
+                      "ses_done": ("closed", None)}
+            for sid, (state, body) in states.items():
+                ledger.add_delegation(db, id=sid, title=sid, directory=None, source_key=None, dispatch_seq=None, dispatched_at=1, brief="", context=[])
+                if body:
+                    ledger.add_card(db, sid, body.get("kind", "report"), body)
+                if state == "closed":
+                    ledger.add_conclusion(db, sid, {"progress": "Done.", "conclusion": "Done."})
+                ledger.set_state(db, sid, state)
+            state = {"locale": "en", "awaiting": 2, "delegations": ledger.snapshot(db)}
+            (Path(tmp) / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            broken = dict(state, delegations=[state["delegations"][0], {"id": "ses_broken"}, state["delegations"][1]])
+            (Path(tmp) / "broken.json").write_text(json.dumps(broken), encoding="utf-8")
+            program = "\n\n".join([
+                "import Foundation",
+                swift_block(SOURCES / "Models.swift", "struct DocketState"),
+                swift_block(SOURCES / "Models.swift", "struct LossyList"),
+                swift_block(SOURCES / "Models.swift", "private struct Ignored"),
+                swift_block(SOURCES / "Models.swift", "struct Delegation"),
+                swift_block(SOURCES / "Models.swift", "enum Phase"),
+                swift_block(SOURCES / "Models.swift", "struct Card"),
+                swift_block(SOURCES / "Models.swift", "struct Decision"),
+                swift_block(SOURCES / "Models.swift", "struct Option"),
+                f'for name in ["state", "broken"] {{\n'
+                f'    let data = try! Data(contentsOf: URL(fileURLWithPath: "{tmp}/\\(name).json"))\n'
+                f'    let s = try! JSONDecoder().decode(DocketState.self, from: data)\n'
+                f'    print(name, s.delegations.count, s.unreadable, s.delegations.map {{ "\\($0.id):\\($0.card?.decisions.first?.options.count ?? -1)" }}.joined(separator: ","))\n'
+                f'}}\n',
+            ])
+            source = Path(tmp) / "main.swift"
+            source.write_text(program, encoding="utf-8")
+            run = subprocess.run(["swift", str(source)], capture_output=True, text=True, timeout=300)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        lines = {line.split()[0]: line.split()[1:] for line in run.stdout.splitlines()}
+        count, unreadable, cards = lines["state"]
+        self.assertEqual((int(count), int(unreadable)), (len(states), 0))
+        self.assertIn("ses_await:2", cards)  # the option with the wrong types is still on the card
+        count, unreadable, _ = lines["broken"]
+        self.assertEqual((int(count), int(unreadable)), (2, 1))
+
+
 class SingleInstance(unittest.TestCase):
     def info_plist(self) -> dict:
         script = (APP / "build.sh").read_text(encoding="utf-8")
