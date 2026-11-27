@@ -12,6 +12,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from docket import wording
+
 HOME = Path(os.environ.get("DOCKET_HOME", Path.home() / "Library/Application Support/docket"))
 DB = HOME / "docket.sqlite"
 ROUND_LIMIT = 3
@@ -27,6 +29,17 @@ ROUND_LIMIT = 3
 STATES = ("running", "pending", "awaiting", "limit", "taken_over", "closed")
 # Once at the limit a handoff stays there: only an ending moves it on.
 LIMIT_EXITS = ("taken_over", "closed")
+
+# Alongside the state, each handoff has a phase: where its work stands, as the watchdog sees it.
+#   awaiting_dispatch   the docket is about to hand an instruction to OpenCode
+#   dispatching         sent; not yet seen in the session (a user message of this turn, and busy)
+#   running             OpenCode is seen working on this turn
+#   awaiting_user       a card waits for the user
+#   verifying           the PM is reading the result and writing the next step
+#   closed              done
+#   stalled             the docket tried and could not get it moving; a card says why, with a retry
+PHASES = ("awaiting_dispatch", "dispatching", "running", "awaiting_user", "verifying", "closed", "stalled")
+PHASE_OF = {"pending": "verifying", "awaiting": "awaiting_user", "limit": "awaiting_user", "closed": "closed", "running": "running"}
 
 SCHEMA = """
 create table if not exists delegations (
@@ -70,6 +83,23 @@ create table if not exists runs (                -- CLI engine processes (claude
   finished_at integer
 );
 create index if not exists cards_open on cards(delegation_id, resolved_at);
+create table if not exists turns (               -- instructions the docket handed to OpenCode, see Docket.send
+  id integer primary key autoincrement,
+  delegation_id text not null references delegations(id) on delete cascade,
+  session text not null,               -- the OpenCode session it went to
+  message text not null,
+  via text,                            -- dispatch | relay | fallback | resend | retry | orphan | note
+  attempt integer not null default 1,  -- 2: the watchdog's one automatic resend of the same instruction
+  parent integer,                      -- the turn this one resends
+  started_at integer not null,         -- when it was handed over
+  pid integer,
+  out text,
+  confirmed_at integer,                -- a user message of this turn was in the session, and it was busy
+  last_activity integer,               -- newest message or file change the watchdog saw
+  ended_at integer,
+  outcome text                         -- succeeded | failed | interrupted | not_started | quiet | superseded
+);
+create index if not exists turns_open on turns(delegation_id, ended_at);
 """
 
 
@@ -99,9 +129,14 @@ def connect(path: Path = DB) -> sqlite3.Connection:
     for name, kind in (("engine", "text not null default 'opencode'"), ("engine_session", "text"), ("model", "text"), ("handbacks", "integer not null default 0")):
         if name not in columns:  # ledgers from before the engine layer (handbacks: before hand_back)
             conn.execute(f"alter table delegations add column {name} {kind}")
+    for name, kind in (("phase", "text"), ("phase_at", "integer")):
+        if name not in columns:  # ledgers from before the watchdog: the phase follows the state from the next change
+            conn.execute(f"alter table delegations add column {name} {kind}")
     card_columns = {row[1] for row in conn.execute("pragma table_info(cards)")}
     if "queued" not in card_columns:
         conn.execute("alter table cards add column queued integer not null default 0")
+    if "shown_at" not in card_columns:  # when the card went up on the panel; null for cards from before
+        conn.execute("alter table cards add column shown_at integer")
     return conn
 
 
@@ -139,12 +174,57 @@ def set_state(conn, delegation_id: str, state: str, **fields) -> None:
     columns = ["state = ?", "updated_at = ?"] + [f"{name} = ?" for name in fields]
     conn.execute(f"update delegations set {', '.join(columns)} where id = ?", (state, now(), *fields.values(), delegation_id))
     log(conn, delegation_id, f"state:{state}", fields or None)
+    follow_phase(conn, delegation_id, state)
+
+
+def follow_phase(conn, delegation_id: str, state: str) -> None:
+    """The phase a state implies, except where only the watchdog may move it: an instruction
+    is running once it is seen in the session, not when it was sent, and a stalled handoff
+    stays stalled while its card waits."""
+    row = conn.execute("select phase from delegations where id = ?", (delegation_id,)).fetchone()
+    phase, target = (row[0] if row else None), PHASE_OF.get(state)
+    if target is None:
+        return
+    if state in ("running", "pending") and phase in ("awaiting_dispatch", "dispatching"):
+        return  # pending here is the watchdog's resend on its way, not the PM verifying
+    if state in ("awaiting", "limit") and phase == "stalled":
+        return
+    set_phase(conn, delegation_id, target)
+
+
+def set_phase(conn, delegation_id: str, phase: str, **detail) -> bool:
+    """Move the phase on and log the change (phase:<name>); False when it was already there."""
+    assert phase in PHASES, phase
+    row = conn.execute("select phase from delegations where id = ?", (delegation_id,)).fetchone()
+    if not row or row[0] == phase:
+        return False
+    conn.execute("update delegations set phase = ?, phase_at = ? where id = ?", (phase, now(), delegation_id))
+    log(conn, delegation_id, f"phase:{phase}", {"from": row[0], **detail})
+    return True
+
+
+def open_turn(conn, delegation_id: str):
+    """The instruction OpenCode is working on, as far as the docket knows: the newest turn not ended."""
+    return conn.execute(
+        "select * from turns where delegation_id = ? and ended_at is null order by id desc limit 1", (delegation_id,)
+    ).fetchone()
+
+
+def last_turn(conn, delegation_id: str):
+    return conn.execute("select * from turns where delegation_id = ? order by id desc limit 1", (delegation_id,)).fetchone()
+
+
+def end_turn(conn, turn_id: int, outcome: str) -> bool:
+    """End a turn once; False when it had already ended."""
+    done = conn.execute("update turns set ended_at = ?, outcome = ? where id = ? and ended_at is null", (now(), outcome, turn_id))
+    return done.rowcount > 0
 
 
 def add_card(conn, delegation_id: str, kind: str, body: dict, queued: bool = False) -> int:
+    at = now()
     cursor = conn.execute(
-        "insert into cards (delegation_id, created_at, kind, body, queued) values (?, ?, ?, ?, ?)",
-        (delegation_id, now(), kind, json.dumps(body, ensure_ascii=False), 1 if queued else 0),
+        "insert into cards (delegation_id, created_at, kind, body, queued, shown_at) values (?, ?, ?, ?, ?, ?)",
+        (delegation_id, at, kind, json.dumps(body, ensure_ascii=False), 1 if queued else 0, None if queued else at),
     )
     return cursor.lastrowid
 
@@ -189,8 +269,18 @@ def next_queued(conn, delegation_id: str):
         "select * from cards where delegation_id = ? and resolved_at is null and queued = 1 order by id limit 1", (delegation_id,)
     ).fetchone()
     if row:
-        conn.execute("update cards set queued = 0 where id = ?", (row["id"],))
+        conn.execute("update cards set queued = 0, shown_at = ? where id = ?", (now(), row["id"]))
     return row
+
+
+def shown_at(card) -> int:
+    """When a card went up on the panel: a queued card's wait starts there, not when it was written."""
+    return card["shown_at"] or card["created_at"]
+
+
+def claim(conn, key: str) -> bool:
+    """Take something once (a chat message two paths could both act on); False if already taken."""
+    return conn.execute("insert or ignore into kv values (?, ?)", (key, str(now()))).rowcount > 0
 
 
 def open_permission_card(conn, delegation_id: str):
@@ -289,6 +379,17 @@ def active(conn) -> list:
     return conn.execute("select * from delegations where state not in ('closed') order by dispatched_at").fetchall()
 
 
+HIDDEN = ("pending_relay", "pending_permission", "pm_retry", "wrap_up", "round_spent", "quiet_since", "quiet_woken", "orphan", "next")
+
+
+def _card_text(body: dict) -> dict:
+    """A card's body as the panel shows it: the PM's second sentence joined onto progress."""
+    out = {k: _clean(v) for k, v in body.items() if k not in HIDDEN}
+    if body.get("next"):
+        out["progress"] = _clean(wording.body(body.get("progress"), body["next"]))
+    return out
+
+
 def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dict]:
     """Everything the panel shows: open delegations plus ones closed in the last day.
     A taken-over one stays for a week so it can still be handed back; older ones would
@@ -316,9 +417,10 @@ def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dic
         out.append(
             {
                 "id": row["id"],
-                "title": row["title"],
+                "title": wording.short_title(row["title"]),  # the card head is one glance; the ledger keeps the full name
                 "engine": row["engine"],
                 "state": row["state"],
+                "phase": row["phase"] or PHASE_OF.get(row["state"]),
                 "rounds": row["rounds"],
                 "handbacks": row["handbacks"],
                 "queued": conn.execute(
@@ -331,7 +433,7 @@ def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dic
                     "id": last["id"],
                     "kind": last["kind"],
                     "open": last["resolved_at"] is None,
-                    **{k: _clean(v) for k, v in json.loads(last["body"]).items() if k not in ("pending_relay", "pending_permission", "pm_retry", "wrap_up", "round_spent")},
+                    **_card_text(json.loads(last["body"])),
                     **({"choices": answer.get("choices") or {}, "reply": answer.get("reply") or ""} if answer and last["kind"] != "closed" else {}),
                 }
                 if last

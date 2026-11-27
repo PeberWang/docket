@@ -93,7 +93,7 @@ def main():
     ledger.add_delegation(db, id="ses_demo", title="期刊排序", directory=None, source_key=MAIN, dispatch_seq=1,
                           dispatched_at=ledger.now() - 7200_000, brief="把期刊列表的排序改掉，排序方式留给你定", context=[])
     card_id = docket.show_card("ses_demo", "question", CARD)
-    db.execute("update cards set created_at = ? where id = ?", (ledger.now() - 3600_000, card_id))
+    db.execute("update cards set created_at = ?, shown_at = ? where id = ?", (ledger.now() - 3600_000, ledger.now() - 3600_000, card_id))
     event = {"message": {"role": "user", "content": [{"type": "text", "text": SAID}]}}
     conn.execute("insert into transcript_events values (?, 1, ?, ?)", (CHAT, ledger.now() - 60_000, json.dumps(event, ensure_ascii=False)))
     conn.commit()

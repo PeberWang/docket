@@ -94,6 +94,7 @@ if [ -d "$HOME/.openclaw/workspace/skills" ]; then
   rm -rf "$HOME/.openclaw/workspace/skills/desk-dispatch"
   cp -R "$REPO/integrations/openclaw/desk-dispatch" "$HOME/.openclaw/workspace/skills/desk-dispatch"
   chmod +x "$HOME/.openclaw/workspace/skills/desk-dispatch/scripts/desk-dispatch"
+  ln -sf "$REPO/scripts/docket" "$HOME/.openclaw/workspace/skills/desk-dispatch/scripts/docket"
   say "Installed the OpenClaw skill desk-dispatch"
 fi
 

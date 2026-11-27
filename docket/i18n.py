@@ -10,6 +10,8 @@ import subprocess
 TEXT = {
     "en": {
         "language": "English",
+        "plain_example": "write \"the signing settings are missing one value; I will fill it in\", not \"fix the Team ID in Config/Signing.local.xcconfig\"",
+        "term_example": "a provisioning profile (the permission file installed on the phone)",
         "limit": "All {n} rounds used. Please take it over.",
         "err_limit": "All rounds are used: take it over or close it.",
         "docket_fault": "Docket itself failed, not the task; the work is not lost. {error}",
@@ -52,9 +54,25 @@ TEXT = {
         "err_empty": "Pick an option or write a reply.",
         "err_open_card": "Answer the card that is waiting first.",
         "permission_expired": "That run has already finished, so the permission is no longer needed.",
+        "why_not_started": "OpenCode never started on the instruction",
+        "why_quiet": "OpenCode went quiet for {minutes} minutes: no new message, no file changed",
+        "why_unfinished": "OpenCode's run ended {outcome} before it finished",
+        "stalled": "Stuck: {why}, and the docket's one automatic resend did not get it moving. Nothing was lost. Retry sends the same instruction again.",
+        "stalled_question": "Send it again?",
+        "orphan": "Stuck: the PM got a message outside Docket (from {source}) and answered with “{action}”, which nobody carried out.",
+        "orphan_question": "Carry out the PM's answer now?",
+        "orphan_run": "Carry it out",
+        "orphan_skip": "Leave it",
+        "resend_same": "(Docket: this instruction was sent before and {why}. Here it is again; carry on from where the project stands now.)\n\n{message}",
+        "resend_new": "(Docket: this continues the work of OpenCode session {session}, where {why}; that session takes no more instructions. Files the last turn left behind:\n{files}\nBuild on them; do not start over.)\n\n{message}",
+        "no_files": "(none changed)",
+        "err_taken_over": "You have taken this handoff over: hand it back first, or write in OpenCode.",
+        "err_note_empty": "Write what to pass on.",
     },
     "zh": {
         "language": "简体中文",
+        "plain_example": "写「签名配置缺一项，我来补」，不写「修 Config/Signing.local.xcconfig 里的 Team ID」",
+        "term_example": "描述文件（装到手机上的授权文件）",
         "limit": "已满 {n} 轮，请接管。",
         "err_limit": "轮次已用完，请接管或结案",
         "docket_fault": "案头自身出错，不是任务失败，工作没有丢。{error}",
@@ -97,13 +115,28 @@ TEXT = {
         "err_empty": "选一个选项或回一句话",
         "err_open_card": "先把正在等你的那张卡处理掉",
         "permission_expired": "那一轮已经结束了，这次授权不再需要。",
+        "why_not_started": "OpenCode 一直没有开始执行这条指令",
+        "why_quiet": "OpenCode {minutes} 分钟没有新消息、没有改动任何文件",
+        "why_unfinished": "OpenCode 这一轮没做完就结束了（{outcome}）",
+        "stalled": "卡住了：{why}，案头自动重派一次也没能让它动起来。工作没有丢，点重试会把同一条指令再派一次。",
+        "stalled_question": "再派一次？",
+        "orphan": "卡住了：PM 在案头之外收到一条消息（来自 {source}），回复了「{action}」，但没有人执行。",
+        "orphan_question": "现在按 PM 这条回复执行？",
+        "orphan_run": "执行",
+        "orphan_skip": "不执行",
+        "resend_same": "（案头：这条指令之前发过，{why}。现在重发一次，请从项目当前的状态接着做。）\n\n{message}",
+        "resend_new": "（案头：这是接着 OpenCode 会话 {session} 的工作，那边{why}，那个会话已经不再接受指令。上一轮留下的文件：\n{files}\n请在这些改动的基础上继续，不要从头重做。）\n\n{message}",
+        "no_files": "（没有文件改动）",
+        "err_taken_over": "这件交办已被你接管：先交还，或直接在 OpenCode 里说。",
+        "err_note_empty": "写一句要转达的话",
     },
 }
 
 # Text limits are in characters; English needs roughly twice the room of Chinese.
 LIMITS = {
-    "en": {"progress": 160, "question": 80, "label": 40, "why": 80, "decided": 120, "conclusion": 200},
-    "zh": {"progress": 80, "question": 40, "label": 20, "why": 40, "decided": 60, "conclusion": 100},
+    # progress and next are the card's two sentences; body caps the two together
+    "en": {"progress": 100, "next": 100, "body": 200, "question": 80, "label": 24, "why": 80, "decided": 120, "conclusion": 125},
+    "zh": {"progress": 40, "next": 40, "body": 80, "question": 40, "label": 8, "why": 40, "decided": 60, "conclusion": 50},
 }
 
 

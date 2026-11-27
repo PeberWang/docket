@@ -84,6 +84,8 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
 - Code keeps watch, the model only judges: the PM is not a loop. It is woken once per finished run with `openclaw agent --session-key agent:main:docket-<id>`, and nothing it writes goes to your chat.
 - When you close a handoff, a one-sentence conclusion goes into OpenClaw's daily memory, so your agent still knows what happened.
 - If you mention a handoff in the chat later, the judge recognises it and the PM proposes a follow-up on the panel. It is never sent without your click.
+- One writer: only the service hands instructions to the coding agent and wakes a PM, and only what a PM answers to the service is carried out. Anyone else (you, the main chat, another session) passes a word on with `docket note <handoff> "<text>"` or **Pass a word on** on the card.
+- A watchdog in the service follows every instruction it hands over, every 30 s. The dispatch printing "dispatched" does not count: an instruction is running once its message is in the session and the session is busy. Not there within 90 s, or silent (no message, no file changed in the project) for 10 minutes, or ended interrupted, killed or failed: it is sent again once, in a new session told which files the last turn left when the old one is interrupted or stuck. A second miss marks the handoff stalled, with a card that says why and a retry. A PM answer that reached the PM some other way (a `sessions_send` into its session) is found within 2 minutes and carried out the service's way, or put on such a card. Each handoff's phase (`awaiting_dispatch`, `dispatching`, `running`, `awaiting_user`, `verifying`, `closed`, `stalled`) is in the ledger; `docket status <handoff>` prints it with every change, and a daily summary of how often work got stuck, healed itself or needed you goes to `~/.openclaw/workspace/cron-logs/docket/<date>/health.md`.
 
 The full rationale is in [docs/design.md](docs/design.md).
 
@@ -120,6 +122,7 @@ To remove it: `bash scripts/uninstall.sh` takes out the launch agents, the app, 
 - Cards wait their turn. If a new brief arrives while a card is waiting, it queues behind it (the card shows "N more waiting") and nothing is overwritten. Answered cards drop out; a closed handoff shows only its conclusion.
 - A permission request is the one thing that blocks the work. It never joins the card queue and there is no permission card on the panel: it appears only as a popup at the top right of the screen, which says in one sentence what the coding agent wants to do outside the project and what the risk is, for example "It wants to delete some temporary files outside the project; deleted files cannot be recovered.", and lets you allow or reject it. If the popup is not installed, the panel says so once, and you answer in the OpenCode window. If the run ends before you answer, the request expires by itself.
 - `desk-dispatch --engine claude` or `--engine codex` picks another coding agent for one task; `"engine"` in the config changes the default.
+- To add something to a handoff from anywhere but the panel, use `scripts/docket note <handoff> "<text>"` (a unique prefix of the id is enough; `scripts/docket list` shows them). `scripts/docket status <handoff>` shows where it stands. A card marked **Stuck** or **Docket fault** is the service saying it could not go on by itself: **Retry** sends the same thing again.
 
 ## Configuration
 
@@ -139,7 +142,7 @@ To remove it: `bash scripts/uninstall.sh` takes out the launch agents, the app, 
 | `stale_enabled` | `true` | look after cards nobody answers on the panel (the next three keys); `false` turns all of it off |
 | `stale_threshold` | `0.9` | how sure the judge must be that you answered a card in the chat, or made it moot, before its PM closes it or relays your answer (needs the judge and `attribute`) |
 | `quiet_wake_minutes` | `180` | a card unanswered this long, with the coding agent idle, wakes its PM once: it closes the card or asks one more specific question, never picks an option for you |
-| `quiet_expire_minutes` | `1440` | a card unanswered this long is closed by Docket itself and noted as expired; both clocks start no earlier than the first run of a Docket version that has them |
+| `quiet_expire_minutes` | `1440` | a card unanswered this long is closed by Docket itself and noted as expired; both clocks start when the card goes up on the panel (not when a queued card was written), move on when the judge sees you still weighing it in the chat, and never before the first sweep with `stale_enabled` on |
 | `judge` | `{}` | `backend` (`"systemone"` or `"openai"`), `model`, `endpoint`, `keychain_service`; easier from Settings → Models |
 | `attribute` | `true` | recognise later mentions of a handoff in the chat |
 | `context_threshold` | `0.5` | how sure the judge must be to keep a message as background |
@@ -185,6 +188,8 @@ Development notes: offline tests with `python3 -I -m unittest discover -s tests 
 ### 案头：可以迟到
 
 请示件是一句话进展加最多两个待你定的问题，每个问题给出推荐选项，可以等到你有空再看。你点一下或回一句，项目经理转给编程代理续做。界面和请示件跟随系统语言，可在配置里设 `"locale": "zh"`。
+
+只有案头的后台能给编程代理派活、能叫醒项目经理。别处想补一句话（你、主会话、别的会话），用 `docket note <交办> "<话>"` 或卡片上的「转达一句」。后台每 30 秒看一眼每条派出去的指令：90 秒内没在会话里出现、跑着跑着 10 分钟没有新消息也没改文件、或者中断退出，都自动重派一次，第二次还不动就标成「卡住了」并出卡附重试。`docket status <交办>` 能看到每一次状态跃迁，每天的健康摘要写在 `~/.openclaw/workspace/cron-logs/docket/<日期>/health.md`。
 
 安装：`bash scripts/install.sh`；卸载：`bash scripts/uninstall.sh`（保留交办记录，加 `--purge` 一并删除）。没有判断模型的密钥也能用，设置窗口会显示「未配置」。
 

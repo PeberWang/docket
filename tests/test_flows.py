@@ -223,6 +223,31 @@ class Flows(unittest.TestCase):
         event = self.db.execute("select detail from events where delegation_id = 'ses_x' and kind = 'pm:invalid'").fetchone()
         self.assertEqual(json.loads(event[0])["raw"], "I checked everything and it looks fine.")
 
+    def test_a_card_with_paths_and_too_many_words_is_asked_again(self):
+        sloppy = {"kind": "question",
+                  "progress": "健身 FitLog v0.1 已在 项目/fitness-app 建好工程，tools/build.sh 能编译通过，模拟器跑起来了，但真机安装还需要你在 Config/Signing.local.xcconfig 里填 Team ID 并按 docs/INSTALL_DEVICE.md 操作。",
+                  "decisions": [{"id": "d1", "question": "签名怎么处理？", "options": [
+                      {"id": "a", "label": "我来填 DEVELOPMENT_TEAM", "recommended": True}, {"id": "b", "label": "先不装真机", "recommended": False}]}]}
+        clean = {"kind": "question", "progress": "健身记录 App 第一版做好了，模拟器上能用。", "next": "装到你手机上还差签名配置，要我先补上吗？",
+                 "decisions": [{"id": "d1", "question": "签名配置怎么处理？", "options": [
+                     {"id": "a", "label": "你来补", "recommended": True}, {"id": "b", "label": "先不装手机", "recommended": False}]}]}
+        prompts = []
+        self.real_pm([json.dumps(sloppy, ensure_ascii=False), json.dumps(clean, ensure_ascii=False)])
+        run = pm.run
+        pm.run = lambda key, prompt, timeout=None, model=None: (prompts.append(prompt), run(key, prompt))[1]
+        with mock.patch.object(pm, "LOCALE", "zh"):
+            self.docket.on_run_end("ses_x", "succeeded", "done")
+        retry = prompts[1]
+        for said in ("/fitness-app", "tools/build.sh", "Config/Signing.local.xcconfig", "docs/INSTALL_DEVICE.md", "DEVELOPMENT_TEAM",
+                     "over the limit of 40", "over the limit of 8", "a file path"):
+            self.assertIn(said, retry)
+        self.assertIn(sloppy["progress"], retry)  # the offending sentence itself, not just "too long"
+        body = json.loads(ledger.open_card(self.db, "ses_x")["body"])
+        self.assertEqual(body["progress"], clean["progress"])
+        shown = next(d for d in ledger.snapshot(self.db) if d["id"] == "ses_x")["card"]
+        self.assertEqual(shown["progress"], "健身记录 App 第一版做好了，模拟器上能用。装到你手机上还差签名配置，要我先补上吗？")
+        self.assertNotIn("next", shown)
+
     def test_three_bad_replies_become_a_failure_card_not_a_closed_handoff(self):
         models = self.real_pm(["prose one", "prose two", "prose three"])
         self.docket.on_run_end("ses_x", "succeeded", "done")

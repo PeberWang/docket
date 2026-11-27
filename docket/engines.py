@@ -64,35 +64,66 @@ class Engine:
         raise NotImplementedError
 
 
+def session_of(handoff: dict) -> str:
+    """The OpenCode session a handoff works in now: its own, unless the watchdog opened a new one."""
+    return handoff.get("engine_session") or handoff["id"]
+
+
 class OpenCode(Engine):
     name, label = "opencode", "OpenCode"
 
-    def resume(self, handoff, text, model: str | None = None):
-        # `opencode run -s <unknown id>` would start a brand-new session: make sure it exists.
-        Service().session(handoff["id"])
+    def _spawn(self, handoff, argv: list[str]) -> dict:
         RUNS.mkdir(parents=True, exist_ok=True)
         out = RUNS / f"{handoff['id']}-{uuid.uuid4().hex[:8]}.out"
         workdir = dispatches.existing_dir(handoff.get("directory") or Path.home())
         with open(out, "wb") as stdout:
-            subprocess.Popen(
-                ["opencode", "run", "-s", handoff["id"], *(["--model", model] if model else []), *self.args, text],
-                cwd=str(workdir),
+            process = subprocess.Popen(
+                argv, cwd=str(workdir),
                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.STDOUT,
                 start_new_session=True,  # the service's event stream reports when the run ends
             )
+        return {"pid": process.pid, "out": str(out), "process": process}
+
+    def resume(self, handoff, text, model: str | None = None) -> dict:
+        """Start `opencode run -s`. That the process started says nothing about the session: the
+        docket's watchdog confirms the turn in the session itself (see Docket.watchdog)."""
+        session = session_of(handoff)
+        # `opencode run -s <unknown id>` would start a brand-new session: make sure it exists.
+        Service().session(session)
+        return self._spawn(handoff, ["opencode", "run", "-s", session, *(["--model", model] if model else []), *self.args, text])
+
+    def start_session(self, handoff, title: str, text: str, model: str | None = None, wait: float = 30) -> tuple[str | None, dict]:
+        """A new session for the same work (the old one is interrupted and will not take more):
+        archived like opencode-dispatch makes them. Returns (session id or None, the run)."""
+        import time
+
+        started = int(time.time() * 1000)
+        run = self._spawn(handoff, ["opencode", "run", "--title", title, "--archived", *(["--model", model] if model else []), *self.args, text])
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            try:
+                for session in Service().recent_sessions(limit=20):
+                    if session.get("title") == title and (session.get("time") or {}).get("created", 0) >= started - 5000:
+                        return session["id"], run
+            except Exception:
+                pass
+            if run["process"].poll() is not None:
+                break
+            time.sleep(1)
+        return None, run
 
     def answer_permission(self, handoff, request_id: str, decision: str):
-        Service()._request("POST", f"/api/session/{handoff['id']}/permission/{request_id}/reply", {"decision": decision})
+        Service()._request("POST", f"/api/session/{session_of(handoff)}/permission/{request_id}/reply", {"decision": decision})
 
     def last_reply(self, handoff):
-        return Service().last_reply(handoff["id"])
+        return Service().last_reply(session_of(handoff))
 
     def takeover(self, handoff):
         request = Path.home() / "Library/Application Support/opencode-openclaw-inbox/open-session"
         request.parent.mkdir(parents=True, exist_ok=True)
         import time
 
-        request.write_text(json.dumps({"sessionID": handoff["id"], "at": int(time.time() * 1000)}), encoding="utf-8")
+        request.write_text(json.dumps({"sessionID": session_of(handoff), "at": int(time.time() * 1000)}), encoding="utf-8")
         subprocess.run(["open", "-a", "OpenCode"], capture_output=True)
 
 

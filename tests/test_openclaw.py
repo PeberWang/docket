@@ -236,7 +236,7 @@ class Daemon(unittest.TestCase):
         db = self.docket.db()
         ledger.add_delegation(db, id="ses_live", title="t", directory=None, source_key="agent:main:main", dispatch_seq=1, dispatched_at=0, brief="", context=[])
         seen = []
-        self.docket.attribute = lambda message, recent, live: seen.append(message.text)
+        self.docket.attribute = lambda message, recent, live, *session: seen.append(message.text)
         self.docket.scan_mentions(db)  # first sight sets the cursor
         self.add(27189, new_user("冒烟那个怎么样了"))
         self.docket.scan_mentions(db)

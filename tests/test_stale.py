@@ -37,8 +37,8 @@ QUESTION = {
 }
 
 
-def user_event(text: str) -> str:
-    return json.dumps({"message": {"role": "user", "content": [{"type": "text", "text": text}]}}, ensure_ascii=False)
+def user_event(text: str, role: str = "user") -> str:
+    return json.dumps({"message": {"role": role, "content": [{"type": "text", "text": text}]}}, ensure_ascii=False)
 
 
 class Judge:
@@ -120,13 +120,18 @@ class Stale(unittest.TestCase):
 
     def card(self, age_hours: float, body: dict = QUESTION) -> int:
         card_id = self.docket.show_card("ses_s", body["kind"], dict(body))
-        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - int(age_hours * HOUR), card_id))
+        self.age(card_id, age_hours)
         return card_id
 
-    def say(self, text: str, ago_minutes: float = 1) -> int:
+    def age(self, card_id: int, hours: float):
+        """Make a card as old as if it had been on show for `hours`."""
+        at = ledger.now() - int(hours * HOUR)
+        self.db.execute("update cards set created_at = ?, shown_at = ? where id = ?", (at, at, card_id))
+
+    def say(self, text: str, ago_minutes: float = 1, role: str = "user") -> int:
         self.seq += 1
         conn = sqlite3.connect(self.chat)
-        conn.execute("insert into transcript_events values (?, ?, ?, ?)", (CHAT, self.seq, ledger.now() - int(ago_minutes * 60_000), user_event(text)))
+        conn.execute("insert into transcript_events values (?, ?, ?, ?)", (CHAT, self.seq, ledger.now() - int(ago_minutes * 60_000), user_event(text, role)))
         conn.commit()
         conn.close()
         return self.seq
@@ -242,11 +247,11 @@ class Stale(unittest.TestCase):
         new = ledger.open_card(self.db, "ses_s")
         body = json.loads(new["body"])
         self.assertTrue(body["quiet_woken"])
-        self.assertEqual(body["quiet_since"], self.row(card)["created_at"])  # the first card's clock
+        self.assertEqual(body["quiet_since"], self.row(card)["shown_at"])  # the first card's clock
         self.assertEqual(self.state(), "awaiting")
         self.assertEqual(self.docket.delegation("ses_s")["rounds"], 0)
         # The re-asked card is not woken for again; it expires on the first one's clock.
-        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - 4 * HOUR, new["id"]))
+        self.age(new["id"], 4)
         self.docket.sweep_stale()
         self.assertEqual(len(self.wakes), 1)
         self.db.execute("update cards set body = ? where id = ?", (json.dumps({**body, "quiet_since": ledger.now() - 25 * HOUR}), new["id"]))
@@ -294,7 +299,7 @@ class Stale(unittest.TestCase):
         self.docket.sweep_stale()
         self.assertEqual(self.wakes, [])
         self.assertIsNone(self.row(card)["resolved_at"])
-        self.db.execute("update cards set created_at = ? where id = ?", (ledger.now() - 25 * HOUR, card))
+        self.age(card, 25)
         self.docket.sweep_stale()
         self.assertEqual(self.state(), "closed")
 
@@ -355,6 +360,195 @@ class Stale(unittest.TestCase):
         card = self.card(30, dict(QUESTION, pending_permission="per_1"))
         self.docket.sweep_stale()
         self.assertIsNone(self.row(card)["resolved_at"])
+
+    # ---------- what the review found ----------
+
+    def test_a_queued_card_waits_from_when_it_went_up(self):
+        first = self.card(23)
+        queued = self.docket.show_card("ses_s", "report", {"kind": "report", "progress": "报告", "decisions": [], "decided_for_you": []})
+        self.age(queued, 23)
+        self.db.execute("update cards set shown_at = null where id = ?", (queued,))  # written long ago, never on show
+        self.replies.append({"action": "card", "card": {"kind": "report", "progress": "ok", "decisions": [], "decided_for_you": []}})
+        ledger.spend_round(self.db, "ses_s", first, {"choices": {"d1": "a"}, "reply": ""})
+        self.docket.advance("ses_s")
+        self.assertEqual(ledger.open_card(self.db, "ses_s")["id"], queued)
+        self.docket.sweep_stale()
+        self.assertIsNone(self.row(queued)["resolved_at"])  # neither woken for nor expired
+        self.assertEqual((self.wakes, self.state()), ([], "awaiting"))
+
+    def test_chat_before_a_queued_card_went_up_is_not_read_against_it(self):
+        self.card(1)
+        queued = self.docket.show_card("ses_s", "report", {"kind": "report", "progress": "报告", "decisions": [], "decided_for_you": []})
+        self.say("按发表时间", ago_minutes=10)
+        ledger.resolve_card(self.db, ledger.open_card(self.db, "ses_s")["id"], {"reply": "x"})
+        self.docket.advance("ses_s")
+        self.assertEqual(ledger.open_card(self.db, "ses_s")["id"], queued)
+        self.docket.sweep_stale()
+        self.assertEqual(self.judge.asked, [])
+
+    def test_one_chat_message_is_never_charged_twice(self):
+        card = self.card(1)
+        seq = self.say("按发表时间")
+        self.judge.status, self.judge.message, self.judge.picks = "answered", f"m{seq}", {"d1": "b"}
+        self.replies.append({"action": "close", "conclusion": "定了", "basis": "用户说按发表时间"})
+        self.docket.sweep_stale()
+        self.assertEqual(self.docket.delegation("ses_s")["rounds"], 1)
+        # The mention poll reaches the same message afterwards: it is already taken.
+        ledger.add_delegation(self.db, id="ses_t", title="t", directory=None, source_key=MAIN, dispatch_seq=1, dispatched_at=0, brief="", context=[])
+        message = mock.Mock(seq=seq, text="按发表时间", time=ledger.now(), role="user")
+        answer = {"choice": "ses_t", "belongs": 0.95, "new_work": 0.1}
+        with mock.patch.object(relevance, "attribute", lambda *a: (answer, None)), mock.patch.object(relevance, "should_move", lambda *a: True):
+            self.docket.attribute(message, [], [self.docket.delegation("ses_t")], CHAT)
+        self.assertEqual(self.docket.delegation("ses_t")["rounds"], 0)
+        self.assertEqual(self.events("mention:claimed")[0]["seq"], seq)
+        # And the other way round: a message the mention took is not used to settle a card.
+        card2 = self.docket.show_card("ses_t", "question", dict(QUESTION))
+        seq2 = self.say("按影响因子", ago_minutes=-1)
+        ledger.claim(self.db, f"chat_claim:{CHAT}:{seq2}")
+        self.judge.message, self.judge.picks = f"m{seq2}", {"d1": "a"}
+        self.db.execute("update delegations set state = 'awaiting' where id = 'ses_t'")
+        self.docket.sweep_stale()
+        self.assertIsNone(self.row(card2)["resolved_at"])
+        self.assertEqual(self.events("stale:claimed")[0]["card"], card2)
+        self.assertEqual(self.docket.delegation("ses_t")["rounds"], 0)
+        self.assertIsNotNone(self.row(card)["resolved_at"])
+
+    def test_a_failed_quiet_wake_leaves_the_card_and_no_failure_card(self):
+        card = self.card(4)
+        with mock.patch.object(pm, "ask", mock.Mock(side_effect=pm.PMFailed([{"attempt": 1, "model": None, "raw": "", "errors": ["x"]}]))):
+            self.docket.sweep_stale()
+        self.assertIsNone(self.row(card)["resolved_at"])
+        self.assertEqual(ledger.open_card(self.db, "ses_s")["id"], card)
+        self.assertEqual(self.db.execute("select count(*) from cards where kind = 'failure'").fetchone()[0], 0)
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(self.events("stale:pm-failed")[0]["card"], card)
+        self.assertNotIn("quiet_wake", daemon.Docket.RETRYABLE)
+
+    def test_still_weighing_it_moves_the_clock(self):
+        card = self.card(23.9)
+        seq = self.say("排序那件我再想想，明天定")
+        self.judge.status, self.judge.message, self.judge.p = "discussing", f"m{seq}", 0.7
+        self.docket.sweep_stale()
+        self.assertIsNone(self.row(card)["resolved_at"])
+        self.assertEqual(self.events("stale:discussing")[0]["seq"], seq)
+        self.age(card, 25)  # a day after the card, but only an hour after the user last weighed it
+        self.docket.sweep_stale()
+        self.assertIsNone(self.row(card)["resolved_at"])
+        self.assertEqual(self.wakes, [])
+
+    def test_a_user_line_is_judged_with_what_it_replies_to(self):
+        self.card(1)
+        self.say("要不要把日报也改成周报？", role="assistant")
+        self.say("好")
+        self.docket.sweep_stale()
+        rows = self.judge.asked[0][0]["messages_after_card"]
+        self.assertEqual([(r["text"], r.get("replying_to")) for r in rows], [("好", "要不要把日报也改成周报？")])
+
+    def test_a_quiet_wake_yields_to_a_chat_answer_given_meanwhile(self):
+        card = self.card(4)
+        seq = []
+
+        def answer_in_chat_while_thinking(key, message, validate, record=None):
+            seq.append(self.say("按发表时间", ago_minutes=0))
+            self.judge.status, self.judge.message, self.judge.picks = "answered", f"m{seq[0]}", {"d1": "b"}
+            self.wakes.append(message)
+            if len(self.wakes) == 1:
+                return {"action": "close", "conclusion": "没人回，收掉"}
+            return {"action": "close", "conclusion": "你在主会话里定了按发表时间", "basis": "用户说按发表时间"}
+
+        with mock.patch.object(pm, "ask", answer_in_chat_while_thinking):
+            self.docket.sweep_stale()
+        resolution = json.loads(self.row(card)["resolution"])
+        self.assertEqual((resolution["action"], resolution["choices"]), ("answered-in-chat", {"d1": "b"}))
+        self.assertEqual(self.events("stale:dropped")[0]["chat"], "answered")
+        self.assertIn("你在主会话里定了", json.loads(self.db.execute("select body from cards where kind = 'closed'").fetchone()[0])["conclusion"])
+
+    def test_nonsense_minutes_fall_back_to_the_defaults(self):
+        card = self.card(1)
+        self.docket.settings.update(quiet_expire_minutes=0, quiet_wake_minutes=-5)
+        self.docket.sweep_stale()
+        self.assertIsNone(self.row(card)["resolved_at"])
+        self.assertEqual(self.docket.minutes_ms("quiet_expire_minutes"), 1440 * 60_000)
+
+    def test_the_grace_starts_when_the_feature_first_runs(self):
+        card = self.card(30)
+        self.docket.stale_since = None
+        self.docket.settings["stale_enabled"] = False
+        self.docket.sweep_stale()
+        self.assertIsNone(self.db.execute("select 1 from kv where key = 'stale_since'").fetchone())
+        self.docket.settings["stale_enabled"] = True
+        self.docket.sweep_stale()  # switched on now: the 30-hour card's clock starts now
+        self.assertIsNotNone(self.docket.stale_since)
+        self.assertIsNone(self.row(card)["resolved_at"])
+
+    def test_a_session_that_is_gone_counts_as_idle(self):
+        card = self.card(25)
+
+        def gone(service, sid):
+            raise RuntimeError("404 NotFound")
+
+        with mock.patch.object(self.service, "session", gone):
+            self.docket.sweep_stale()
+        self.assertEqual(self.state(), "closed")
+        self.assertEqual(json.loads(self.row(card)["resolution"])["by"], "quiet-expiry")
+
+    def test_at_the_limit_a_chat_answer_is_blocked(self):
+        card = self.card(1)
+        self.db.execute("update delegations set rounds = 3 where id = 'ses_s'")
+        seq = self.say("按发表时间")
+        self.judge.status, self.judge.message, self.judge.picks = "answered", f"m{seq}", {"d1": "b"}
+        self.docket.sweep_stale()
+        self.assertEqual(self.events("stale:blocked")[0]["card"], card)
+        self.assertEqual(self.state(), "limit")
+        self.assertEqual((self.docket.delegation("ses_s")["rounds"], self.wakes), (3, []))
+
+    def test_a_docket_failure_card_only_expires(self):
+        card = self.card(5, {"kind": "failure", "progress": "案头出错", "decisions": [], "decided_for_you": [], "docket_fault": True})
+        self.say("按发表时间")
+        self.docket.sweep_stale()
+        self.assertEqual((self.wakes, self.judge.asked), ([], []))
+        self.assertIsNone(self.row(card)["resolved_at"])
+        self.age(card, 25)
+        self.docket.sweep_stale()
+        self.assertEqual(self.state(), "closed")
+
+    def test_a_held_lock_is_not_waited_on(self):
+        card = self.card(25)
+        lock = self.docket.lock("ses_s")
+        lock.acquire()
+        try:
+            self.docket.sweep_stale()  # returns at once instead of blocking the sweep thread
+        finally:
+            lock.release()
+        self.assertIsNone(self.row(card)["resolved_at"])
+
+    def test_a_new_chat_session_is_read_afresh(self):
+        card = self.card(1)
+        self.docket.mark_judged(card, "old-session:99")
+        self.say("按发表时间")  # seq 1 in the current session, below the old session's 99
+        self.docket.sweep_stale()
+        self.assertEqual(len(self.judge.asked), 1)
+
+    def test_a_closed_handoff_cannot_be_retried(self):
+        self.docket.settings["fallback_model"] = "p/m"
+        ledger.log(self.db, "ses_s", "relayed", {"message": "go"})
+        self.docket.finish("ses_s", "done")
+        with self.assertRaises(ValueError):
+            self.docket.retry("ses_s")
+
+    def test_reconcile_prunes_notes_of_resolved_cards(self):
+        card = self.card(1)
+        self.docket.mark_judged(card, f"{CHAT}:1")
+        self.db.execute("insert into kv values ('chat_claim:x:1', ?)", (str(ledger.now() - 8 * 86400_000),))
+        self.docket.finish("ses_s", "done")
+
+        class Service:
+            def recent_sessions(self, limit=40):
+                return []
+
+        with mock.patch.object(daemon, "Service", Service):
+            self.docket.reconcile()
+        self.assertIsNone(self.db.execute("select 1 from kv where key like 'stale_seq:%' or key like 'chat_claim:%'").fetchone())
 
     # ---------- the ledger's leftovers ----------
 

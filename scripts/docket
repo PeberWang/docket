@@ -1,0 +1,11 @@
+#!/usr/bin/python3 -I
+"""docket note | status | list: see docket/cli.py."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from docket.cli import main  # noqa: E402
+
+main()

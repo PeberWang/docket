@@ -23,7 +23,8 @@
   "quiet_wake_minutes": 180,    // a card unanswered this long, with the session idle, wakes its PM once:
                                 // close it, or ask one more specific question instead
   "quiet_expire_minutes": 1440, // a card unanswered this long is closed by the docket itself, noted as expired;
-                                // both clocks start no earlier than the first run of a docket that has them
+                                // both clocks start when the card goes up on the panel, move on when the chat
+                                // shows you still weighing it, and never before the first sweep with this on
   "judge": {                    // the model that picks a card's background and attributes main-thread messages
                                 // with no key it is off: cards still register, without background or attribution
     "backend": "systemone",     // "systemone" (TypeSafe System One, probabilities) | "openai" (any OpenAI-compatible endpoint)

@@ -193,22 +193,35 @@ def card_view(card: dict) -> dict:
 def card_status(task: dict, card: dict, messages: list[dict], threshold: float = 0.9, pick_min: float = 0.5) -> tuple[dict, dict]:
     """Has the user settled a waiting card in the main chat, in the messages written after it?
 
-    `messages` are the user's main-chat messages after the card went up ({id, role, time,
-    text}, oldest first). One Choice decides the card's status (answered / superseded / open),
-    one picks the message that settles it, and one per decision reads which option the user
-    took ("other" when they said something none of the options says).
+    `messages` are the main-chat messages after the card went up ({id, role, time, text},
+    oldest first, both speakers). Only the user's are judged, each with the assistant line it
+    replies to, so a bare "yes" is read against what it said yes to. One Choice decides the
+    card's status (answered / superseded / discussing / open), one picks the message it rests
+    on, and one per decision reads which option the user took ("other" when they said something
+    none of the options says).
 
     Returns ({"status", "probability", "message", "choices", "probabilities"}, usage). Code calls
     a card answered only when the status is sure, one message is named, and every decision is
-    read; superseded needs the status and the message. Anything short of that is "open".
+    read; superseded needs the status and the message. "discussing" (the user is weighing it,
+    not done) needs only a likely status and a message: the caller then restarts the card's
+    clock rather than acting. Anything short of that is "open".
     """
     usage = {"input_tokens": 0, "requests": 0}
-    messages = [m for m in messages if m["role"] == "user"][-CARD_MESSAGES:]
-    if not messages:
+    rows, last_assistant = [], ""
+    for m in messages:
+        if m["role"] != "user":
+            last_assistant = m["text"]
+            continue
+        row = _rows([m])[0]
+        if last_assistant:
+            row["replying_to"] = _clip(redact(last_assistant), ROUND_CHARS)
+        rows.append(row)
+    rows = rows[-CARD_MESSAGES:]
+    if not rows:
         return {"status": "open", "probability": 0.0, "message": None, "choices": {}, "probabilities": {}}, usage
     view = card_view(card)
     asks = bool(view["decisions"])
-    state = {"task": delegation_view(task), "card": view, "messages_after_card": _rows(messages)}
+    state = {"task": delegation_view(task), "card": view, "messages_after_card": rows}
     answered = (
         "A message gives the user's decision on the card's question(s): it picks one of the options, or says what to do "
         "in words that settle each question. Asking about the topic, thinking aloud, or deciding a different question is not enough."
@@ -220,7 +233,8 @@ def card_status(task: dict, card: dict, messages: list[dict], threshold: float =
             "type": "choice",
             "instructions": (
                 "`card` waits on Docket for the user's answer about `task`. The user did not answer it there; `messages_after_card` "
-                "is what they wrote in the main chat after it went up. Did they settle the card there?"
+                "is what they wrote in the main chat after it went up (`replying_to` is the assistant line a message answers; "
+                "an answer to that line is not an answer to the card). Did they settle the card there?"
             ),
             "criteria": {
                 "answered": answered,
@@ -228,15 +242,19 @@ def card_status(task: dict, card: dict, messages: list[dict], threshold: float =
                     "The messages show the card no longer needs an answer: this work was dropped, done another way, or replaced "
                     "by a different plan, so none of what the card asks will be taken up."
                 ),
-                "open": "Neither: the messages do not settle the card, or they are about something else.",
+                "discussing": (
+                    "The user is still on the card's question but has not decided: they ask about it, weigh the options, "
+                    "or say they will decide later."
+                ),
+                "open": "None of these: the messages do not touch the card, or they are about something else.",
             },
         },
         "message": {
             "type": "choice",
-            "instructions": "Which message in `messages_after_card` settles `card` (answers it, or makes it moot)?",
+            "instructions": "Which message in `messages_after_card` settles `card` (answers it, or makes it moot), or, if none does, is the latest one still weighing its question?",
             "criteria": {
-                **{row["id"]: f"Message `{row['id']}` settles the card." for row in state["messages_after_card"]},
-                "none": "No message settles the card.",
+                **{row["id"]: f"Message `{row['id']}`." for row in rows},
+                "none": "No message settles the card or weighs its question.",
             },
         },
     }
@@ -258,9 +276,11 @@ def card_status(task: dict, card: dict, messages: list[dict], threshold: float =
     out = {"status": "open", "probability": status.get("probabilities", {}).get(status.get("choice"), 0.0), "message": None, "choices": {}, "probabilities": probabilities}
     choice = status.get("choice")
     named = answers["message"].get("choice")
-    if choice not in ("answered", "superseded") or out["probability"] < threshold:
-        return out, usage
     if named in (None, "none") or answers["message"].get("probabilities", {}).get(named, 0) < pick_min:
+        return out, usage
+    if choice == "discussing" and out["probability"] >= pick_min:
+        return {**out, "status": "discussing", "message": named}, usage
+    if choice not in ("answered", "superseded") or out["probability"] < threshold:
         return out, usage
     choices = {}
     if choice == "answered":

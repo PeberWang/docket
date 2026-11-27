@@ -196,6 +196,11 @@ def session_id_for(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute(
         f"select session_id from session_windows where session_key in ({marks}) order by rowid desc limit 1", variants
     ).fetchone()
+    if not row:  # 2026.11 stores keys lowercased ("agent:main:docket-de70…"), the docket keeps the session id's case
+        row = conn.execute(
+            f"select session_id from session_windows where lower(session_key) in ({marks}) order by rowid desc limit 1",
+            [v.lower() for v in variants],
+        ).fetchone()
     return row[0] if row else None
 
 
