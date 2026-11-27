@@ -17,6 +17,11 @@ BRIEF_*.md
 launch-posts.md
 promo/
 
+# audits of the author's own running instance: reports and ledger copies hold personal data
+/audit/
+# git worktrees for work in progress, so the running service's checkout is never edited mid-change
+/.worktrees/
+
 # internal notes; kept in the working tree, never published
 /CLAUDE.md
 /HANDOFF.md
