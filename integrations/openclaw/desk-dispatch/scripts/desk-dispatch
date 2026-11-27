@@ -3,7 +3,9 @@
 
     desk-dispatch [--engine opencode|claude|codex] --title "<task name>" [-f BRIEF] [--model M] [--auto] "<instruction>"
 
-  opencode (default)  runs `opencode-dispatch --detach`: archived, inbox prefix, returns at once
+  opencode (default)  the Docket service opens the OpenCode session itself (archived, inbox prefix) and
+                      hands it the instruction; with an OpenCode older than 2.2, or the service not
+                      running, `opencode-dispatch --detach` starts it instead and Docket picks it up
   claude, codex       the Docket service starts the CLI agent in the current directory and follows it
 
 Returns as soon as the task is started. The caller gets no completion notice: Docket
@@ -13,6 +15,7 @@ this script.
 Environment:
   DOCKET_ENGINE         default engine (else config.json "engine", else opencode)
   OPENCODE_DISPATCH   path to opencode-dispatch (default: the sibling OpenClaw skill)
+  DOCKET_DISPATCH_VIA=opencode-dispatch   always start OpenCode work with opencode-dispatch
   DOCKET_DISPATCH_DRY_RUN=1   print what would happen
 """
 
@@ -72,6 +75,16 @@ def default_engine() -> str:
 
 
 def opencode(options):
+    """Through the Docket service when it can drive this OpenCode; else opencode-dispatch, as before."""
+    if os.environ.get("DOCKET_DISPATCH_VIA") != "opencode-dispatch" and os.environ.get("DOCKET_DISPATCH_DRY_RUN") != "1":
+        answer = ask_docket(options, "opencode", fallback_ok=True)
+        if answer is not None:
+            print(f"dispatched in background: {options['title']} (handoff {answer['id']}, OpenCode). Follow-ups happen on Docket.")
+            return
+    opencode_dispatch(options)
+
+
+def opencode_dispatch(options):
     script = os.environ.get("OPENCODE_DISPATCH") or str(Path(__file__).resolve().parents[2] / "opencode-dispatch/scripts/opencode-dispatch")
     if not Path(script).exists():
         script = "opencode-dispatch"
@@ -89,7 +102,9 @@ def opencode(options):
     os.execvp(argv[0], argv)
 
 
-def cli(options, engine):
+def ask_docket(options, engine, fallback_ok=False):
+    """POST /api/dispatch. None when the caller should start it another way (fallback_ok only):
+    the service is not running, or it answers that this OpenCode goes through opencode-dispatch."""
     brief = ""
     if options["brief"]:
         try:
@@ -104,12 +119,11 @@ def cli(options, engine):
         "brief": brief,
         "model": options["model"],
     }
-    if os.environ.get("DOCKET_DISPATCH_DRY_RUN") == "1":
-        print(json.dumps({**body, "brief": f"<{len(brief)} chars>"}, ensure_ascii=False))
-        sys.exit(0)
     try:
         service = json.loads((HOME / "daemon.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        if fallback_ok:
+            return None
         fail("the Docket service is not running (no daemon.json)", 1)
     request = urllib.request.Request(
         service["url"] + "/api/dispatch",
@@ -118,12 +132,25 @@ def cli(options, engine):
         headers={"Content-Type": "application/json", "X-Docket-Token": service["token"]},
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            result = json.loads(response.read())
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read())
     except urllib.error.HTTPError as error:
-        fail(f"Docket refused: {error.read().decode('utf-8', 'replace')[:300]}", 1)
+        text = error.read().decode("utf-8", "replace")
+        if fallback_ok and error.code == 409:
+            return None
+        fail(f"Docket refused: {text[:300]}", 1)
     except urllib.error.URLError as error:
+        if fallback_ok:
+            return None
         fail(f"the Docket service is not reachable: {error.reason}", 1)
+
+
+def cli(options, engine):
+    if os.environ.get("DOCKET_DISPATCH_DRY_RUN") == "1":
+        print(json.dumps({"engine": engine, "title": options["title"], "directory": os.getcwd(),
+                          "instruction": options["instruction"] or "Follow the attached brief."}, ensure_ascii=False))
+        sys.exit(0)
+    result = ask_docket(options, engine)
     print(f"dispatched in background: {options['title']} (handoff {result['id']}, {ENGINES[engine]}). Follow-ups happen on Docket.")
 
 

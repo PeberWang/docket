@@ -79,7 +79,7 @@ class Stale(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         for patcher in (
-            mock.patch.object(engines.OpenCode, "resume", lambda engine, handoff, text, model=None: sent.append(text)),
+            mock.patch.object(engines.OpenCode, "resume", lambda engine, handoff, text, model=None, **sent_as: sent.append(text)),
             mock.patch.object(pm, "ask", self.pm),
             mock.patch.object(daemon, "MEMORY_DIR", Path(tempfile.mkdtemp())),
         ):

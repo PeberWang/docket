@@ -35,7 +35,7 @@ class Flows(unittest.TestCase):
 
         daemon.Service = engines.Service = FakeService
         # Never start real agents from a test: every engine's follow-up is recorded instead.
-        engines.OpenCode.resume = lambda engine, handoff, text, model=None: sent.append(text)
+        engines.OpenCode.resume = lambda engine, handoff, text, model=None, **sent_as: sent.append(text)
         engines.Cli.launch = lambda engine, handoff, prompt, first: (_ for _ in ()).throw(AssertionError("no CLI runs in tests"))
         engines.Cli.takeover = engines.OpenCode.takeover = lambda engine, handoff: None
         pm.ask = lambda key, message, validate, record=None: self.answers.pop(0)

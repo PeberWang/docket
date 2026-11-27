@@ -149,11 +149,11 @@ To remove it: `bash scripts/uninstall.sh` takes out the launch agents, the app, 
 | `attribute` | `true` | recognise later mentions of a handoff in the chat |
 | `context_threshold` | `0.5` | how sure the judge must be to keep a message as background |
 | `move_threshold` | `0.85` | how sure it must be that a chat message belongs to a handoff |
-| `engines` | | per-agent CLI arguments, e.g. `{"claude": {"args": [...]}}` |
+| `engines` | | per-agent arguments, e.g. `{"claude": {"args": [...]}}`, and `{"opencode": {"transport": "http"}}` (or `"cli"`) to force how OpenCode is driven |
 
 A value of the wrong type (say, a string where a number belongs) is logged and replaced by its default; it does not stop the service.
 
-Nobody is there to approve prompts during a run. OpenCode gets `--auto` when `desk-dispatch --auto` is used; Claude Code runs with `--permission-mode acceptEdits`, an allow list and `--permission-prompts none`; Codex with `--sandbox workspace-write`. Change them under `engines`.
+Nobody is there to approve prompts during a run. OpenCode 2.2 and later is driven over its HTTP API: Docket answers each permission request itself, approving what is inside the project or a read, and putting writes outside the project and deletions on a card; an older OpenCode runs through `opencode run -s --auto`. Claude Code runs with `--permission-mode acceptEdits`, an allow list and `--permission-prompts none`; Codex with `--sandbox workspace-write`. Change them under `engines`.
 
 ## Privacy
 

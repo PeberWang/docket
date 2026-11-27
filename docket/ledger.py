@@ -99,9 +99,18 @@ create table if not exists turns (               -- instructions the docket hand
   confirmed_at integer,                -- a user message of this turn was in the session, and it was busy
   last_activity integer,               -- newest message or file change the watchdog saw
   ended_at integer,
-  outcome text                         -- succeeded | failed | interrupted | not_started | quiet | superseded
+  outcome text,                        -- succeeded | failed | interrupted | not_started | quiet | superseded | closed
+  message_id text,                     -- over HTTP: the id Docket gave the instruction, named again when it is delivered
+  transport text                       -- http | cli
 );
 create index if not exists turns_open on turns(delegation_id, ended_at);
+create table if not exists jobs (                 -- PM jobs in flight: a restart picks them up (see Docket.submit)
+  id integer primary key autoincrement,
+  delegation_id text not null,
+  name text not null,
+  args text not null,
+  created_at integer not null
+);
 """
 
 
@@ -139,6 +148,10 @@ def connect(path: Path = DB) -> sqlite3.Connection:
         conn.execute("alter table cards add column queued integer not null default 0")
     if "shown_at" not in card_columns:  # when the card went up on the panel; null for cards from before
         conn.execute("alter table cards add column shown_at integer")
+    turn_columns = {row[1] for row in conn.execute("pragma table_info(turns)")}
+    for name in ("message_id", "transport"):
+        if name not in turn_columns:  # ledgers from before the HTTP engine: their turns went through the CLI
+            conn.execute(f"alter table turns add column {name} text")
     return conn
 
 
@@ -321,6 +334,26 @@ def amend_resolution(conn, card_id: int, extra: dict) -> None:
     row = conn.execute("select resolution from cards where id = ?", (card_id,)).fetchone()
     current = json.loads(row[0]) if row and row[0] else {}
     conn.execute("update cards set resolution = ? where id = ?", (json.dumps({**current, **extra}, ensure_ascii=False), card_id))
+
+
+def add_job(conn, delegation_id: str, name: str, args: list) -> int | None:
+    """Record a PM job before it runs; None when its arguments cannot be written down (a closure)."""
+    try:
+        written = json.dumps(args, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+    return conn.execute(
+        "insert into jobs (delegation_id, name, args, created_at) values (?, ?, ?, ?)", (delegation_id, name, written, now())
+    ).lastrowid
+
+
+def job_rows(conn) -> list:
+    return conn.execute("select * from jobs order by id").fetchall()
+
+
+def drop_job(conn, job_id: int | None) -> None:
+    if job_id is not None:
+        conn.execute("delete from jobs where id = ?", (job_id,))
 
 
 def set_body(conn, card_id: int, body: dict) -> None:

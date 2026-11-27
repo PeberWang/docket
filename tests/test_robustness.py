@@ -48,6 +48,8 @@ class World:
         self.clock = clock
         self.sessions: dict[str, dict] = {}
         self.messages: dict[str, list] = {}  # newest first, like the service
+        self.by_id: dict[str, dict] = {}  # message id → message, as the HTTP API reads one
+        self.inbox: dict[str, list] = {}  # session → items handed over but not delivered yet
         self.requests: list = []
         self.pm: list = []  # transcript.Message, oldest first
 
@@ -58,9 +60,12 @@ class World:
         self.sessions[sid] = {"id": sid, "title": title, "outcome": None, "time": {"created": self.now(), "updated": self.now()}}
         self.messages[sid] = []
 
-    def start(self, sid, text):
+    def start(self, sid, text, message_id=None):
         """The instruction reaches the session and it goes busy."""
-        self.messages[sid].insert(0, {"type": "user", "time": {"created": self.now()}, "content": [{"type": "text", "text": text}]})
+        message = {"id": message_id, "type": "user", "time": {"created": self.now()}, "content": [{"type": "text", "text": text}], "metadata": {"docket": {"handoff": sid}}}
+        if message_id:
+            self.by_id[message_id] = message
+        self.messages[sid].insert(0, message)
         self.sessions[sid]["time"].update(busy=self.now(), updated=self.now())
         self.sessions[sid]["outcome"] = None
 
@@ -92,6 +97,22 @@ def fake_service(world):
         def recent_sessions(self, limit=50):
             return list(world.sessions.values())
 
+        def message(self, sid, message_id):
+            return world.by_id.get(message_id)
+
+        def inbox(self, sid):
+            return list(world.inbox.get(sid, []))
+
+        @staticmethod
+        def text_of(message):
+            return "\n".join(c.get("text", "") for c in (message or {}).get("content") or [] if c.get("type") == "text").strip()
+
+        def capabilities(self):
+            return {"session.create", "session.prompt", "session.interrupt", "session.update"}
+
+        def drives_over_http(self):
+            return True
+
         def _request(self, method, path, body=None, timeout=30):
             world.requests.append((method, path))
             sid = path.split("/")[3] if path.startswith("/api/session/") else None
@@ -99,8 +120,12 @@ def fake_service(world):
             if path.endswith("/interrupt") and (times.get("busy") or 0) > (times.get("idle") or 0):
                 world.end(sid, "interrupted")
 
-        def prompt(self, sid, text):
-            raise AssertionError("the docket never prompts over HTTP")
+        def interrupt(self, sid):
+            self._request("POST", f"/api/session/{sid}/interrupt", {})
+            return True
+
+        def prompt(self, sid, text, *args, **kwargs):
+            raise AssertionError("this world is the CLI transport: the docket never prompts over HTTP")
 
     return Service
 
@@ -131,7 +156,7 @@ class Watched(unittest.TestCase):
         Service = fake_service(world)
         test = self
 
-        def resume(engine, handoff, text, model=None):
+        def resume(engine, handoff, text, model=None, **sent_as):
             session = engines.session_of(handoff)
             test.sent.append((session, text))
             if (test.on_resume.pop(0) if test.on_resume else "start") == "die":
@@ -139,7 +164,7 @@ class Watched(unittest.TestCase):
             world.start(session, text)
             return {"pid": None, "out": None}
 
-        def start_session(engine, handoff, title, text, model=None, wait=30):
+        def start_session(engine, handoff, title, text, model=None, wait=30, **sent_as):
             sid = f"ses_new{len(world.sessions)}"
             world.add_session(sid, title)
             test.sent.append((sid, text))
@@ -437,14 +462,35 @@ class Robustness(Watched):
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.row()["phase"], "running")
 
-    def test_3_an_interrupted_run_is_not_a_delivery(self):
+    def test_3_a_failed_run_is_not_a_delivery(self):
+        self.relay("build it")
+        self.tick()
+        self.world.end("ses_x", "failed")
+        self.docket.handle({"type": "session.execution.failed", "data": {"sessionID": "ses_x"}})
+        self.assertEqual(len(self.sent), 2)  # sent again at once
+        self.assertEqual(self.pm_messages, [self.pm_messages[0]])  # the PM was not asked to verify a delivery
+
+    def test_3_a_run_someone_stopped_in_opencode_goes_to_the_pm_and_is_not_sent_again(self):
+        """Audit 2026-11-27, W8: pressing stop in OpenCode used to be treated as a fault and redone."""
         self.relay("build it")
         self.tick()
         self.world.end("ses_x", "interrupted")
+        self.answers.append(dict(CARD, kind="failure", progress="you stopped the run halfway"))
         self.docket.handle({"type": "session.execution.interrupted", "data": {"sessionID": "ses_x"}})
-        self.assertEqual(len(self.sent), 2)  # sent again at once, in a new session
-        self.assertNotEqual(self.sent[1][0], "ses_x")
-        self.assertEqual(self.pm_messages, [self.pm_messages[0]])  # the PM was not asked to verify a delivery
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.open_card_body()[1]["progress"], "you stopped the run halfway")
+
+    def test_3_the_interrupt_docket_itself_sent_is_not_a_run_end(self):
+        """Audit 2026-11-27, W4: Docket's own stop of a stuck session came back as a run end and a card."""
+        self.relay("build it")
+        self.tick()
+        turn = ledger.open_turn(self.db, "ses_x")
+        self.docket.stop_turn(turn)
+        self.assertIn(("POST", "/api/session/ses_x/interrupt"), self.world.requests)
+        pm_before = len(self.pm_messages)
+        self.docket.handle({"type": "session.execution.interrupted", "data": {"sessionID": "ses_x"}})
+        self.assertEqual(len(self.pm_messages), pm_before)
+        self.assertTrue(self.events("run-end:own-interrupt"))
 
     def test_3_quiet_twice_stalls(self):
         self.relay()
@@ -537,6 +583,33 @@ class Robustness(Watched):
         with self.assertRaises(ValueError):
             self.docket.note("ses_x", "  ")
 
+    def test_a_note_the_pm_keeps_as_background_leaves_the_handoff_where_it_was(self):
+        self.answers.append({"action": "hold", "note": "a rename may come next week"})
+        self.docket.note("ses_x", "下周可能要改名")
+        self.assertEqual(self.row()["state"], "running")  # the run goes on; no card, no "what next"
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
+        self.assertEqual(self.events("note:kept")[0]["was"], "running")
+        # A closed handoff a note cannot reopen on a hold: it stays closed.
+        self.docket.finish("ses_x", "done")
+        self.answers.append({"action": "hold", "note": "no action needed"})
+        self.docket.note("ses_x", "只是说一声")
+        self.assertEqual(self.row()["state"], "closed")
+        self.assertEqual(self.db.execute("select count(*) from cards where kind = 'closed'").fetchone()[0], 1)
+
+    def test_a_run_someone_stopped_may_not_be_continued_by_the_pm(self):
+        """Audit 2026-11-27, W8: a stop is the person's decision, so the PM may only say where things stand."""
+        self.relay("build it")
+        self.tick()
+        self.world.end("ses_x", "interrupted")
+        self.answers.append({"action": "relay", "message": "carry on"})
+        self.answers.append(dict(CARD, kind="report", progress="stopped after the list view"))
+        self.docket.handle({"type": "session.execution.interrupted", "data": {"sessionID": "ses_x"}})
+        self.assertIn("Do not send OpenCode anything more", self.pm_messages[-1])
+        self.assertEqual(self.sent, [("ses_x", "build it")])  # a refused relay becomes a failure card, never a send
+        body = self.open_card_body()[1]
+        self.assertTrue(body["docket_fault"])
+        self.assertEqual(body["pm_retry"]["job"], "write_card")
+
     def test_status_shows_every_phase_change(self):
         self.on_resume = ["die", "start"]
         self.relay("build")
@@ -568,6 +641,72 @@ class Robustness(Watched):
         report = json.loads((self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.json").read_text(encoding="utf-8"))
         self.assertEqual((report["stuck"], report["healed"], report["needed_a_person"]), (2, 1, 1))
         self.assertIn("needed a person: 1", (self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.md").read_text(encoding="utf-8"))
+
+
+class HttpTransport(Watched):
+    """The HTTP engine: Docket's own message ids, deliveries, and instructions from outside."""
+
+    def hand_over(self, message_id="msg_d1", text="build it", transport="http"):
+        return self.docket.track("ses_x", "ses_x", text, "relay", run={"message": message_id, "transport": transport})
+
+    def test_a_turn_is_confirmed_by_the_id_docket_gave_it(self):
+        turn = self.hand_over()
+        self.assertFalse(self.docket.confirm_turn(self.row(), ledger.open_turn(self.db, "ses_x")))
+        self.world.inbox["ses_x"] = [{"id": "msg_d1"}]  # queued behind the work already running
+        self.assertEqual(self.docket.confirm_turn(self.row(), ledger.open_turn(self.db, "ses_x")), "queued")
+        turn = ledger.open_turn(self.db, "ses_x")
+        self.world.by_id["msg_d1"] = {"id": "msg_d1", "type": "user", "content": [{"type": "text", "text": "build it"}]}
+        self.assertTrue(self.docket.confirm_turn(self.row(), turn))
+        self.assertIsNotNone(ledger.open_turn(self.db, "ses_x")["confirmed_at"])
+        self.assertEqual(self.events("turn:running")[-1]["by"], "message id")
+
+    def test_a_delivery_that_is_dockets_own_confirms_the_turn(self):
+        self.hand_over()
+        self.world.by_id["msg_d1"] = {"id": "msg_d1", "type": "user", "content": [{"type": "text", "text": "build it"}], "metadata": {"docket": {"handoff": "ses_x"}}}
+        self.docket.handle({"type": "session.inbox.delivered", "data": {"sessionID": "ses_x", "inboxID": "msg_d1"}})
+        self.assertIsNotNone(ledger.open_turn(self.db, "ses_x")["confirmed_at"])
+
+    def test_an_instruction_from_outside_is_recorded_and_its_run_reaches_the_pm_marked(self):
+        """Audit 2026-11-27, 4A-4: the main agent (or a person in OpenCode) writing straight into the session."""
+        self.world.by_id["msg_out"] = {"id": "msg_out", "type": "user", "content": [{"type": "text", "text": "add a delete button too"}], "metadata": {}}
+        self.docket.handle({"type": "session.inbox.delivered", "data": {"sessionID": "ses_x", "inboxID": "msg_out"}})
+        foreign = self.events("turn:foreign")[0]
+        self.assertEqual((foreign["message_id"], foreign["text"]), ("msg_out", "add a delete button too"))
+        self.assertEqual(ledger.open_turn(self.db, "ses_x")["via"], "foreign")
+        self.world.end("ses_x", "succeeded")
+        self.answers.append(dict(CARD, progress="the button is in"))
+        self.docket.on_run_end("ses_x", "succeeded", "added it", session="ses_x")
+        self.assertIn("Docket did not start this run", self.pm_messages[-1])
+        self.assertIn("add a delete button too", self.pm_messages[-1])
+
+    def test_an_instruction_from_outside_during_dockets_own_run_is_logged_not_adopted(self):
+        self.hand_over()
+        self.world.by_id["msg_out"] = {"id": "msg_out", "type": "user", "content": [{"type": "text", "text": "and a rename"}], "metadata": {}}
+        self.docket.handle({"type": "session.inbox.delivered", "data": {"sessionID": "ses_x", "inboxID": "msg_out"}})
+        self.assertEqual(self.events("turn:foreign")[0]["during"], 1)
+        self.assertEqual(ledger.open_turn(self.db, "ses_x")["message_id"], "msg_d1")  # Docket's turn stays the one followed
+
+    def test_a_run_that_ended_before_the_watchdog_saw_it_is_a_run_end_not_a_quiet_turn(self):
+        """Audit 2026-11-27, W2."""
+        self.hand_over()
+        self.world.start("ses_x", "build it", "msg_d1")
+        self.assertTrue(self.docket.confirm_turn(self.row(), ledger.open_turn(self.db, "ses_x")))
+        self.clock[0] += 60_000  # it worked a minute, then ended
+        self.world.end("ses_x", "succeeded")  # and the end event never arrived
+        self.answers.append(dict(CARD, progress="it was built"))
+        self.tick()
+        self.assertEqual(self.events("watchdog:ended-unseen")[-1]["outcome"], "succeeded")
+        self.assertEqual(self.events("watchdog:quiet"), [])
+        self.assertEqual(self.sent, [])  # not sent again
+
+    def test_a_job_cut_off_by_a_restart_runs_again(self):
+        """Audit 2026-11-27, S6: the person's answer was counted, and the PM never heard it."""
+        ledger.add_job(self.db, "ses_x", "write_card", ["ses_x", "succeeded", "the run's reply"])
+        self.answers.append(dict(CARD, progress="here is where it stands"))
+        self.docket.resume_jobs()
+        self.assertEqual(self.pm_messages and "the run's reply" in self.pm_messages[-1], True)
+        self.assertEqual(self.db.execute("select count(*) from jobs").fetchone()[0], 0)
+        self.assertTrue(self.events("job:resumed"))
 
 
 class ObserveMode(Watched):
@@ -629,7 +768,7 @@ class ObserveMode(Watched):
         _, body = self.open_card_body()
         self.assertEqual(body["progress"], "the run was stopped halfway")
         self.assertEqual(self.row()["state"], "awaiting")
-        self.assertEqual(self.observed(), [("send it again", "interrupted")])
+        self.assertEqual(self.observed(), [])  # stopping it was a person's act: nothing would be sent again
 
     def test_the_end_of_a_turn_that_looks_unconfirmed_still_reaches_the_pm(self):
         """A turn looks unconfirmed when its message scrolled out of the newest ten and the started event was missed."""
@@ -645,7 +784,7 @@ class ObserveMode(Watched):
         self.assertEqual(self.observed(), [("ignore this run end", "unconfirmed end")])
 
     def test_a_send_that_fails_shows_a_failure_card_at_once(self):
-        def broken(engine, handoff, text, model=None):
+        def broken(engine, handoff, text, model=None, **sent_as):
             raise RuntimeError("opencode is not installed")
 
         with mock.patch.object(engines.OpenCode, "resume", broken):

@@ -31,7 +31,9 @@ sys.path.insert(0, str(ROOT))
 
 from docket import config as docket_config  # noqa: E402
 from docket import dispatches, engines, i18n, ledger, pm, registry, risk  # noqa: E402
+from docket.opencode import ACTIVITY as ACTIVITY_EVENTS  # noqa: E402
 from docket.opencode import Service  # noqa: E402
+from docket.opencode import new_id as opencode_id  # noqa: E402
 from judge import backend, relevance, transcript  # noqa: E402
 from judge.transcript import connect as openclaw_connect  # noqa: E402
 from judge.transcript import messages as transcript_messages  # noqa: E402
@@ -156,19 +158,41 @@ class Docket:
             return self.jobs.get(delegation_id, 0) > 0
 
     def submit(self, delegation_id: str, job, *args):
+        """Queue a PM job for a handoff. It is written down first (audit S6): a restart runs it again
+        instead of leaving the person's answer counted and never carried out."""
         with self.locks_guard:
             self.jobs[delegation_id] = self.jobs.get(delegation_id, 0) + 1
+        name = getattr(job, "__name__", "")
+        recorded = ledger.add_job(self.db(), delegation_id, name, list(args)) if getattr(job, "__self__", None) is self else None
 
         def run():
             try:
-                self.run_job(delegation_id, job, args)
+                self.run_job(delegation_id, job, args, recorded)
             finally:
                 with self.locks_guard:
                     self.jobs[delegation_id] -= 1
 
         return self.workers.submit(run)
 
-    def run_job(self, delegation_id: str, job, args):
+    def resume_jobs(self):
+        """Jobs a restart cut off: run them again for live handoffs (their handoff's lock keeps order),
+        and drop the ones whose handoff has ended."""
+        db = self.db()
+        for row in ledger.job_rows(db):
+            ledger.drop_job(db, row["id"])
+            handoff = self.delegation(row["delegation_id"])
+            # A closing's conclusion still runs on a closed handoff: that is where its memory entry comes from.
+            may_run = handoff and (handoff["state"] in LIVE or row["name"] == "conclude")
+            job = getattr(self, row["name"], None) if may_run else None
+            if job is None:
+                ledger.log(db, row["delegation_id"], "job:dropped", {"job": row["name"], "args": row["args"][:200],
+                                                                     "state": handoff["state"] if handoff else None})
+                continue
+            ledger.log(db, row["delegation_id"], "job:resumed", {"job": row["name"], "args": row["args"][:200]})
+            log.info("resumed %s for %s after the restart", row["name"], row["delegation_id"])
+            self.submit(row["delegation_id"], job, *json.loads(row["args"]))
+
+    def run_job(self, delegation_id: str, job, args, job_id: int | None = None):
         with self.lock(delegation_id):
             try:
                 job(*args)
@@ -182,6 +206,8 @@ class Docket:
             except Exception as error:  # a PM failure must not take the daemon down
                 log.exception("job failed for %s", delegation_id)
                 self.fail_card(delegation_id, self.t("docket_fault", error=str(error)[:200]), job, args, str(error))
+            finally:
+                ledger.drop_job(self.db(), job_id)  # done, failed and shown, or handed to a card's retry
 
     def ask_pm(self, row: dict, message: str, validate):
         """pm.ask, with every unusable reply kept verbatim in the events for later.
@@ -401,6 +427,41 @@ class Docket:
         threading.Thread(target=self.attach_context, args=(handoff_id, title, instruction, brief), daemon=True).start()
         return handoff_id
 
+    def dispatch_opencode(self, title: str, directory: str, instruction: str, brief: str, model: str | None) -> str:
+        """Start an OpenCode handoff over HTTP: Docket makes the session (the handoff's own id, archived,
+        the inbox prefix in the title) and hands it the first instruction the way it sends every other.
+        The ledger row comes first, so the session appearing is never a second registration (audit 4A-7)
+        and the first run's events are never missed (W1). LookupError: this OpenCode cannot be driven
+        over HTTP, and the caller starts the handoff with opencode-dispatch instead."""
+        engine = engines.get("opencode", self.settings)
+        if not engine.over_http():
+            raise LookupError("this OpenCode is driven through opencode-dispatch")
+        try:
+            directory = str(dispatches.existing_dir(directory))
+        except dispatches.MissingDirectory as error:
+            log.warning("dispatch directory not found: %r -> %s", error.raw, error.expanded)
+            raise ValueError(self.t("missing_dir", raw=error.raw, expanded=error.expanded)) from error
+        db = self.db()
+        handoff_id = opencode_id("ses", descending=True)
+        ledger.add_delegation(db, id=handoff_id, title=title, directory=directory, source_key=None, dispatch_seq=None,
+                              dispatched_at=ledger.now(), brief=brief, context=[], engine="opencode", model=model)
+        try:
+            engine.open_session(self.delegation(handoff_id), f"{self.settings['prefix']}{title}")
+        except Exception as error:  # nothing exists in OpenCode yet: the caller falls back to opencode-dispatch
+            db.execute("delete from delegations where id = ?", (handoff_id,))
+            ledger.log(db, None, "dispatch:failed", {"handoff": handoff_id, "title": title, "error": str(error)[:300]})
+            raise LookupError(f"OpenCode did not open the session: {error}") from error
+        prompt = instruction if not brief else f"{instruction}\n\n<file name=\"brief.md\">\n{brief}\n</file>"
+        try:
+            self.send(handoff_id, prompt, via="dispatch")
+        except RuntimeError as error:  # observing, a failed send is not sent again: say so on a card with a retry
+            turn = ledger.last_turn(db, handoff_id)
+            self.fail_card(handoff_id, self.t("docket_fault", error=str(error)[:200]),
+                           self.redispatch if turn else None, (handoff_id, turn["id"]) if turn else (), str(error))
+        threading.Thread(target=self.attach_context, args=(handoff_id, title, instruction, brief), daemon=True).start()
+        log.info("dispatched %s (%s) over HTTP", title, handoff_id)
+        return handoff_id
+
     def attach_context(self, handoff_id: str, title: str, instruction: str, brief: str):
         """Find the dispatch in the watched chat and let the judge pick the background."""
         dispatch = None
@@ -528,24 +589,28 @@ class Docket:
 
     def track(self, delegation_id: str, session: str, message: str, via: str, started: int | None = None,
               attempt: int = 1, parent: int | None = None, run: dict | None = None) -> int:
-        """Start following an instruction handed to OpenCode: dispatching until the watchdog sees it."""
+        """Start following an instruction handed to OpenCode: dispatching until the watchdog sees it.
+        Over HTTP the run names the message id Docket gave it (`run["message"]`)."""
         db = self.db()
         for old in db.execute("select id from turns where delegation_id = ? and ended_at is null", (delegation_id,)).fetchall():
             ledger.end_turn(db, old["id"], "superseded")
         run = run or {}
         turn = db.execute(
-            "insert into turns (delegation_id, session, message, via, attempt, parent, started_at, pid, out) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (delegation_id, session, message, via, attempt, parent, started or ledger.now(), run.get("pid"), run.get("out")),
+            "insert into turns (delegation_id, session, message, via, attempt, parent, started_at, pid, out, message_id, transport)"
+            " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (delegation_id, session, message, via, attempt, parent, started or ledger.now(), run.get("pid"), run.get("out"),
+             run.get("message"), run.get("transport")),
         ).lastrowid
         if run.get("process"):
             self.turn_processes = getattr(self, "turn_processes", {})
             self.turn_processes[turn] = run["process"]
-        ledger.log(db, delegation_id, "turn:sent", {"turn": turn, "session": session, "via": via, "attempt": attempt, "pid": run.get("pid")})
+        ledger.log(db, delegation_id, "turn:sent", {"turn": turn, "session": session, "via": via, "attempt": attempt, "pid": run.get("pid"),
+                                                    **({"message_id": run["message"], "transport": run.get("transport")} if run.get("message") else {})})
         ledger.set_phase(db, delegation_id, "dispatching", turn=turn)
         return turn
 
     def send(self, delegation_id: str, message: str, model: str | None = None, via: str = "relay", text: str | None = None,
-             attempt: int = 1, parent: int | None = None, new_session: bool = False) -> int | None:
+             attempt: int = 1, parent: int | None = None, new_session: bool = False, delivery: str | None = None) -> int | None:
         """The one way an instruction reaches the coding agent (relays, fallbacks, resends, retries).
 
         `message` is the instruction as the PM wrote it; `text` what is actually sent, when the
@@ -561,16 +626,21 @@ class Docket:
             return None
         ledger.set_phase(db, delegation_id, "awaiting_dispatch", via=via, attempt=attempt)
         session, run, error = engines.session_of(row), None, None
+        # Docket's own id and mark on the message: a retry never sends it twice, its delivery is
+        # confirmed by that id, and any other instruction in the session is someone else's.
+        message_id = opencode_id("msg")
+        metadata = {"docket": {"handoff": delegation_id, "via": via, "attempt": attempt}}
         try:
             if new_session:
-                fresh, run = engine.start_session(row, self.continuation_title(row), text or message, model)
+                fresh, run = engine.start_session(row, self.continuation_title(row), text or message, model,
+                                                  message_id=message_id, metadata=metadata)
                 if not fresh:
                     raise RuntimeError("the new OpenCode session did not appear")
                 db.execute("update delegations set engine_session = ? where id = ?", (fresh, delegation_id))
                 ledger.log(db, delegation_id, "session:replaced", {"from": session, "to": fresh})
                 session = fresh
             else:
-                run = engine.resume(row, text or message, model)
+                run = engine.resume(row, text or message, model, message_id=message_id, metadata=metadata, delivery=delivery)
         except Exception as failure:
             error = str(failure)[:300]
         run = run if isinstance(run, dict) else {}
@@ -637,6 +707,8 @@ class Docket:
         db, now = self.db(), ledger.now()
         if not turn["confirmed_at"]:
             seen = self.confirm_turn(row, turn)
+            if seen == "queued":  # handed over and waiting in OpenCode's inbox for the current work to end
+                return
             if seen or now - turn["started_at"] < DISPATCH_GRACE:
                 return
             if seen is None and not self.unreachable_too_long(row["id"]):
@@ -661,6 +733,12 @@ class Docket:
             # A card or the PM has it (a permission request, a question): OpenCode is not expected to move.
             db.execute("update turns set last_activity = ? where id = ?", (now, turn["id"]))
             return
+        ended = self.ended_unseen(turn)
+        if ended:
+            # It ran and finished, and its end event never reached the docket (missed while it was
+            # down, or registered after the run): a run end, never a quiet turn sent again (audit W2).
+            ledger.log(db, row["id"], "watchdog:ended-unseen", {"turn": turn["id"], "outcome": ended})
+            return self.on_run_end(row["id"], ended, session=turn["session"])
         last = turn["last_activity"] or turn["confirmed_at"]
         # Once a quiet turn has been noted in observe mode, its project is not walked every heartbeat.
         quiet_noted = not self.acting and self.was_observed(turn["id"], "quiet")
@@ -706,9 +784,13 @@ class Docket:
         times = message.get("time") or {}
         return max([int(v) for v in times.values() if isinstance(v, (int, float))] or [0])
 
-    def confirm_turn(self, row: dict, turn) -> bool | None:
-        """Is the turn in the session: a user message from when it was sent, and the session busy
-        since (or already done with it)? None when OpenCode cannot be read."""
+    def confirm_turn(self, row: dict, turn) -> bool | str | None:
+        """Is the turn in the session? Over HTTP: its message, by the id Docket gave it, is there
+        ("queued" while it still waits in the session's inbox behind other work). Through the CLI:
+        a user message from when it was sent, and the session busy since (or already done with it).
+        None when OpenCode cannot be read."""
+        if turn["message_id"] and turn["transport"] == "http":
+            return self.confirm_by_id(row, turn)
         try:
             service = Service()
             session = service.session(turn["session"])
@@ -725,12 +807,31 @@ class Docket:
         busy, idle = times.get("busy") or 0, times.get("idle") or 0
         if not (asked and (busy > idle or busy >= since)):
             return False
+        self.mark_running(row["id"], turn)
+        return True
+
+    def mark_running(self, delegation_id: str, turn, how: str | None = None):
         db = self.db()
         if db.execute("update turns set confirmed_at = ?, last_activity = ? where id = ? and confirmed_at is null", (ledger.now(), ledger.now(), turn["id"])).rowcount:
-            ledger.log(db, row["id"], "turn:running", {"turn": turn["id"], "attempt": turn["attempt"], "via": turn["via"], "after_ms": ledger.now() - turn["started_at"]})
-            if self.delegation(row["id"])["state"] == "running":
-                ledger.set_phase(db, row["id"], "running", turn=turn["id"])
-        return True
+            ledger.log(db, delegation_id, "turn:running", {"turn": turn["id"], "attempt": turn["attempt"], "via": turn["via"],
+                                                          "after_ms": ledger.now() - turn["started_at"], **({"by": how} if how else {})})
+            if self.delegation(delegation_id)["state"] == "running":
+                ledger.set_phase(db, delegation_id, "running", turn=turn["id"])
+
+    def confirm_by_id(self, row: dict, turn) -> bool | str | None:
+        try:
+            service = Service()
+            if service.message(turn["session"], turn["message_id"]):
+                self.mark_running(row["id"], turn, "message id")
+                return True
+            queued = any(item.get("id") == turn["message_id"] for item in service.inbox(turn["session"]))
+        except Exception as error:
+            if "404" in str(error) or "NotFound" in str(error):
+                return False
+            log.debug("watchdog: cannot read %s: %s", turn["session"], error)
+            return None
+        self.db().execute("delete from kv where key = ?", (f"unreachable:{row['id']}",))
+        return "queued" if queued else False
 
     def turn_activity(self, row: dict, turn, look_at_files: bool) -> int:
         """The newest sign of work: a message in the session, or (when it has been quiet a while) a file in the project."""
@@ -765,8 +866,10 @@ class Docket:
             service = Service()
             times = service.session(turn["session"]).get("time") or {}
             if (times.get("busy") or 0) > (times.get("idle") or 0):  # stuck at work: an idle session is left as it is
+                # Remembered first: the interrupted event it causes is Docket's own, not a run end (audit W4).
+                self.db().execute("insert or replace into kv values (?, ?)", (f"own_interrupt:{turn['session']}", str(ledger.now())))
                 # OpenCode 2.2 stops a run with /interrupt; /abort does not exist, so stopping never worked before.
-                service._request("POST", f"/api/session/{turn['session']}/interrupt", {})
+                service.interrupt(turn["session"])
                 ledger.log(self.db(), turn["delegation_id"], "turn:aborted", {"turn": turn["id"], "session": turn["session"]})
         except Exception as error:
             log.debug("abort %s: %s", turn["session"], error)
@@ -997,7 +1100,7 @@ class Docket:
             if text and state not in ("closed", "limit", "taken_over") and self.acting:
                 ledger.log(db, row["id"], "orphan:rewake", {"seq": found[-1]["seq"]})
                 ledger.set_state(db, row["id"], "pending")
-                return (self.act, row["id"], pm.note_wake(text, found[-1]["source"], row["rounds"]), None, "orphan")
+                return (self.act, row["id"], pm.note_wake(text, found[-1]["source"], row["rounds"]), None, "orphan", None, state)
             ledger.log(db, row["id"], "orphan:ignored", {"seq": found[-1]["seq"], "state": state, **({} if self.acting else {"observing": True})})
             return None
         action = latest["action"]
@@ -1082,8 +1185,9 @@ class Docket:
                 rounds = ledger.spend_round(db, row["id"])
             if chat:
                 ledger.log(db, row["id"], "chat:paid", {"chat": chat, "via": "note"})
+        was = row["state"]
         ledger.set_state(db, row["id"], "pending", force=True)  # a note opens a closed handoff again
-        self.submit(row["id"], self.act, row["id"], pm.note_wake(text, source, rounds, body if answers else None), text, "note")
+        self.submit(row["id"], self.act, row["id"], pm.note_wake(text, source, rounds, body if answers else None), text, "note", None, was)
         return {"id": row["id"], "rounds": rounds}
 
     def claim_chat_message(self, source: str | None) -> str | None:
@@ -1448,9 +1552,25 @@ class Docket:
             return None, error
 
     def maybe_register(self, session_id: str, attempts: int = 6):
+        """A session that appeared in OpenCode: a handoff opencode-dispatch started (the inbox prefix in
+        its title and a matching dispatch in a watched chat) is registered, once. session.created and
+        session.renamed both arrive for one dispatch, so a second look while the first is still
+        searching the chat is dropped (audit 4A-7)."""
+        with self.locks_guard:
+            registering = self.__dict__.setdefault("registering", set())
+            if session_id in registering:
+                return
+            registering.add(session_id)
+        try:
+            self.register(session_id, attempts)
+        finally:
+            with self.locks_guard:
+                registering.discard(session_id)
+
+    def register(self, session_id: str, attempts: int):
         db = self.db()
         if self.delegation_for_session(session_id):
-            return  # known, or a session the watchdog opened to carry a handoff on
+            return  # known (Docket made it, or registered it already), or a session the watchdog opened to carry a handoff on
         try:
             session = Service().session(session_id)
         except Exception:
@@ -1529,7 +1649,16 @@ class Docket:
         if session and row.get("engine") == "opencode" and session != engines.session_of(row):
             ledger.log(db, row["id"], "run-end:old-session", {"session": session, "event": event})
             return
+        if event == "interrupted" and self.own_interrupt(session or engines.session_of(row)):
+            # Docket stopped it to send the work again (stop_turn): that is not a run end (audit W4).
+            ledger.log(db, row["id"], "run-end:own-interrupt", {"session": session})
+            return
         turn = ledger.open_turn(db, row["id"]) if run_end and event != "question" and row.get("engine") == "opencode" else None
+        if turn and not turn["confirmed_at"] and turn["transport"] == "http" and self.confirm_turn(row, turn) == "queued":
+            # The work before Docket's queued instruction ended; OpenCode takes that instruction up next,
+            # and the PM verifies once it is done (its reply covers both).
+            ledger.log(db, row["id"], "run-end:queued-next", {"turn": turn["id"], "event": event})
+            return
         if turn:
             if not turn["confirmed_at"] and self.confirm_turn(row, turn) is False:
                 if self.acting:
@@ -1541,7 +1670,9 @@ class Docket:
             if not ledger.end_turn(db, turn["id"], event):
                 return
             ledger.log(db, row["id"], "turn:ended", {"turn": turn["id"], "outcome": event, "attempt": turn["attempt"]})
-            if event in UNFINISHED and row["state"] != "limit":
+            # Stopped by someone in OpenCode (Docket did not stop it): a person's act, so the PM tells the
+            # person where things stand and nothing is sent again on its own (audit W8).
+            if event in UNFINISHED and event != "interrupted" and row["state"] != "limit":
                 if self.acting:
                     self.expire_permissions(row["id"])
                     ledger.set_phase(db, row["id"], "awaiting_dispatch", why=event)
@@ -1562,6 +1693,17 @@ class Docket:
             ledger.log(self.db(), session_id, "job:coalesced", {"job": "write_card", "event": event})
             return
         self.submit(session_id, self.write_card, session_id, event, reply)
+
+    OWN_INTERRUPT_WINDOW = 120_000  # ms an interrupted event can follow Docket's own /interrupt
+
+    def own_interrupt(self, session: str) -> bool:
+        """Whether Docket itself interrupted this session a moment ago (stop_turn). Taken once."""
+        db = self.db()
+        found = db.execute("select value from kv where key = ?", (f"own_interrupt:{session}",)).fetchone()
+        if not found:
+            return False
+        db.execute("delete from kv where key = ?", (f"own_interrupt:{session}",))
+        return ledger.now() - int(found[0]) < self.OWN_INTERRUPT_WINDOW
 
     def expire_permissions(self, session_id: str):
         for stale in self.db().execute(
@@ -1613,11 +1755,14 @@ class Docket:
         # and asks the person only what needs them (architecture, section 3). Its own continuations are
         # bounded: past continue_limit in a row it must show the person where things stand.
         left = max(0, self.continue_limit() - self.continues(session_id))
+        last = ledger.last_turn(self.db(), session_id)
+        outside = last["message"] if last and last["via"] == "foreign" else None  # see foreign()
+        stopped = event == "interrupted"  # a person stopped it: a card, never another instruction (audit W8)
         if not self.pm_has_acted(session_id):
-            message = pm.first_wake(row, json.loads(row["context"] or "[]"), event, reply, left)
+            message = pm.first_wake(row, json.loads(row["context"] or "[]"), event, reply, left, outside, stopped)
         else:
-            message = pm.later_wake(event, reply, row["rounds"], left)
-        action = self.ask_pm(row, message, pm.validate_verify(left > 0))
+            message = pm.later_wake(event, reply, row["rounds"], left, outside, stopped)
+        action = self.ask_pm(row, message, pm.validate_verify(left > 0 and not stopped, pm.STOPPED if stopped else None))
         if "action" not in action:  # a brief on its own, the older answer shape: a card
             action = {"action": "card", "card": action}
         now = self.delegation(session_id)["state"]
@@ -1749,7 +1894,8 @@ class Docket:
         ledger.resolve_card(db, card_id, {**resolution, "replayed_at": ledger.now()})
         self.decide(card_id, resolution.get("choices") or {}, resolution.get("reply") or "", replay=True)
 
-    def act(self, delegation_id: str, message: str, said: str | None = None, via: str | None = None, chat: str | None = None):
+    def act(self, delegation_id: str, message: str, said: str | None = None, via: str | None = None, chat: str | None = None,
+            was: str | None = None):
         """Wake the PM and carry out its action.
 
         `said` holds the person's own words behind this wake (a card's answer, a note, a chat
@@ -1776,6 +1922,10 @@ class Docket:
         if via == "mention" and kind != "hold" and not self.take_up_mention(delegation_id, said, action.get("settles_card"), chat):
             return
         self.carry_out(delegation_id, action, via, said)
+        if kind == "hold" and was and self.delegation(delegation_id)["state"] == "pending":
+            # Only the wake needed "pending": the person said something for the record and nothing follows.
+            ledger.log(self.db(), delegation_id, "note:kept", {"was": was})
+            ledger.set_state(self.db(), delegation_id, was, force=True)
 
     @staticmethod
     def answerable(card) -> bool:
@@ -1820,9 +1970,7 @@ class Docket:
             self.executed(delegation_id, "card", card=shown, **({} if shown else {"blocked": True}))
         elif kind == "hold":
             ledger.log(self.db(), delegation_id, "pm:hold", {"via": via, "note": (action.get("note") or "")[:300]})
-            self.executed(delegation_id, "hold")
-            if self.delegation(delegation_id)["state"] == "pending":  # a note set it pending: put it back where its facts say
-                self.settle(delegation_id)
+            self.executed(delegation_id, "hold")  # act() puts the state back when the wake needed "pending"
         else:
             self.finish(delegation_id, action["conclusion"], action.get("remaining"))
             self.executed(delegation_id, "close")
@@ -1874,7 +2022,7 @@ class Docket:
             ledger.log(self.db(), delegation_id, "relay:blocked", {"message": message[:200]})
             self.enter_limit(delegation_id)
             return False
-        turn = self.send(delegation_id, message, model, via=via or "relay")
+        turn = self.send(delegation_id, message, model, via=via or "relay", delivery=delivery)
         ledger.log(self.db(), delegation_id, "relayed", {"message": message[:500], **({"via": via} if via else {}), **({"delivery": delivery} if delivery else {})})
         # A card still on show (one left from before a handback), or one waiting behind the card just answered.
         if ledger.open_card(self.db(), delegation_id) or ledger.next_queued(self.db(), delegation_id):
@@ -2174,6 +2322,8 @@ class Docket:
                 log.debug("event stream dropped: %s", error)
             time.sleep(3)
 
+    ACTIVITY_EVERY = 15_000  # ms: signs of work are written to the turn at most this often per session
+
     def handle(self, event: dict):
         kind = event.get("type", "")
         data = event.get("data") or {}
@@ -2182,6 +2332,10 @@ class Docket:
         session_id = data.get("sessionID") or nested.get("sessionID")
         if not session_id:
             return
+        if kind in ACTIVITY_EVENTS:
+            return self.on_activity(session_id)
+        if kind == "session.inbox.delivered":
+            return self.on_delivered(session_id, data.get("inboxID"))
         if kind in ("session.created", "session.renamed"):
             threading.Thread(target=self.maybe_register, args=(session_id,), daemon=True).start()
             return
@@ -2201,6 +2355,59 @@ class Docket:
             self.on_run_end(row["id"], "question", session=session_id)
         elif kind == "permission.asked":
             self.permission_card(row["id"], data if str(data.get("id", "")).startswith("per_") else nested)
+
+    def on_activity(self, session_id: str):
+        """A step or tool call in a session: work is going on, whatever the messages and files say (audit W6)."""
+        now = ledger.now()
+        seen = getattr(self, "activity_at", None)
+        if seen is None:
+            seen = self.activity_at = {}
+        if now - seen.get(session_id, 0) < self.ACTIVITY_EVERY:
+            return
+        seen[session_id] = now
+        self.db().execute("update turns set last_activity = ? where session = ? and ended_at is null and confirmed_at is not null", (now, session_id))
+
+    def on_delivered(self, session_id: str, message_id: str | None):
+        """An instruction reached the agent in a handoff's session: Docket's own (by its id), or someone else's."""
+        row = self.delegation_for_session(session_id)
+        if not row or not message_id or row["state"] in ("closed", "taken_over"):
+            return
+        db = self.db()
+        mine = db.execute("select * from turns where delegation_id = ? and message_id = ?", (row["id"], message_id)).fetchone()
+        if mine:
+            if mine["ended_at"] is None:
+                self.mark_running(row["id"], mine, "delivered")
+            return
+        try:
+            message = Service().message(session_id, message_id) or {}
+        except Exception as error:
+            log.debug("delivered %s: cannot read the message: %s", message_id, error)
+            message = {}
+        if (message.get("metadata") or {}).get("docket"):
+            return  # Docket's own, from a turn that has since been replaced
+        text = Service.text_of(message)
+        turn = ledger.open_turn(db, row["id"])
+        if turn and turn["transport"] != "http" and not turn["message_id"] and text and text[:200] == (turn["message"] or "")[:200]:
+            # Sent through `opencode run -s`, which picks its own message id: Docket's turn after all.
+            db.execute("update turns set message_id = ? where id = ?", (message_id, turn["id"]))
+            return self.mark_running(row["id"], turn, "delivered")
+        self.foreign(row, session_id, message_id, text, turn)
+
+    def foreign(self, row: dict, session_id: str, message_id: str, text: str, turn):
+        """An instruction someone else wrote into the handoff's session (the main agent running opencode
+        itself, a person typing in OpenCode). Recorded, and followed as a turn when none is open, so its
+        end still reaches the PM, which is told the run was not Docket's (audit 4A-4)."""
+        db = self.db()
+        ledger.log(db, row["id"], "turn:foreign", {"session": session_id, "message_id": message_id, "text": text[:300],
+                                                  "during": turn["id"] if turn else None})
+        log.warning("an instruction reached %s outside Docket: %s", row["title"], text[:120])
+        if turn:
+            return
+        absorbed = self.track(row["id"], session_id, text or "(not readable)", "foreign", run={"message": message_id, "transport": "http"})
+        self.mark_running(row["id"], ledger.open_turn(db, row["id"]), "delivered")
+        if self.delegation(row["id"])["state"] == "pending" and not self.busy(row["id"]):
+            ledger.set_state(db, row["id"], "running")
+        ledger.log(db, row["id"], "turn:absorbed", {"turn": absorbed})
 
     @staticmethod
     def _destructive(resources: str) -> bool:
@@ -2266,6 +2473,14 @@ class Docket:
             return "ask", "outside project, direction unknown"
         return "ask", "outside project, write"
 
+    def unattended(self, row: dict) -> bool:
+        """Whether a run approves its own ordinary requests: `--auto`, or an OpenCode session Docket
+        drives over HTTP, where there is no client to answer them (Docket answers, see permission_card)."""
+        engine = self.engine(row)
+        if "--auto" in (engine.args or []):
+            return True
+        return isinstance(engine, engines.OpenCode) and engine.over_http()
+
     def permission_card(self, session_id: str, request: dict):
         """A run that still asks for permission must not wait silently: ask on Docket."""
         row = self.delegation(session_id)
@@ -2277,7 +2492,7 @@ class Docket:
         # Approve what the machine can vouch for (anything in the project, reads anywhere) and
         # log it; leave writes outside the project and deletes alive for the popup and the card.
         resources = " ".join(str(r) for r in request.get("resources") or [])
-        tier, reason = self.permission_tier(session_id, row, request) if "--auto" in (self.engine(row).args or []) else ("ask", "not --auto")
+        tier, reason = self.permission_tier(session_id, row, request) if self.unattended(row) else ("ask", "not unattended")
         entry = {"action": request.get("action"), "resources": resources[:200], "reason": reason}
         if tier == "auto":
             try:
@@ -2513,10 +2728,13 @@ def serve(docket: Docket):
                     title = (body.get("title") or "").strip()
                     if not title or not (body.get("instruction") or body.get("brief")):
                         return self.reply(400, {"error": "title and instruction are required"})
-                    handoff = docket.dispatch_cli(
-                        body.get("engine") or "", title, body.get("directory") or str(Path.home()),
-                        body.get("instruction") or "", body.get("brief") or "", body.get("model"),
-                    )
+                    start = docket.dispatch_opencode if (body.get("engine") or "opencode") == "opencode" else (
+                        lambda *a: docket.dispatch_cli(body.get("engine"), *a))
+                    try:
+                        handoff = start(title, body.get("directory") or str(Path.home()),
+                                        body.get("instruction") or "", body.get("brief") or "", body.get("model"))
+                    except LookupError as error:  # desk-dispatch starts it with opencode-dispatch instead
+                        return self.reply(409, {"error": str(error), "fallback": "opencode-dispatch"})
                     return self.reply(202, {"ok": True, "id": handoff})
                 if parts[:2] == ["api", "cards"] and len(parts) == 4 and parts[3] == "decide":
                     choices = body.get("choices") or {}
@@ -2556,9 +2774,27 @@ def serve(docket: Docket):
     server.serve_forever()
 
 
+def single_instance():
+    """Only one daemon per data directory (audit C11): a second one would send every instruction twice.
+    The lock goes away with the process, so a crashed daemon never blocks the next start."""
+    import fcntl
+
+    ledger.HOME.mkdir(parents=True, exist_ok=True)
+    handle = open(ledger.HOME / "daemon.lock", "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log.warning("another docket is running on %s: this one stops", ledger.HOME)
+        print("another docket is running", file=sys.stderr)
+        sys.exit(0)
+    return handle  # held open for the process's life
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(threadName)s %(message)s")
+    lock = single_instance()  # noqa: F841: held until the process exits
     docket = Docket()
+    docket.resume_jobs()
     docket.reconcile()
     threading.Thread(target=docket.watch_events, name="events", daemon=True).start()
     threading.Thread(target=docket.watch_mentions, name="mentions", daemon=True).start()

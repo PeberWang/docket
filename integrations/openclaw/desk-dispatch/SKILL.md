@@ -18,7 +18,7 @@ cd <project dir> && ~/.openclaw/workspace/skills/desk-dispatch/scripts/desk-disp
 
 - `--title` is required. Keep it short and specific: at most 12 Chinese characters or 24 Latin ones, a plain name for the work, no version numbers, paths or tech stack (「健身记录 App」, not 「健身 FitLog v0.1 原生 iPhone 训练应用」). Docket cuts a longer one with an ellipsis on the card.
 - `--engine opencode|claude|codex` picks the agent. Leave it out to use the user's default (OpenCode unless they set another).
-- `--auto` lets OpenCode approve its own permission requests (OpenCode only; Claude Code and Codex use Docket's unattended settings).
+- `--auto` lets OpenCode approve its own permission requests (OpenCode only; Claude Code and Codex use Docket's unattended settings). OpenCode 2.2 and later runs unattended anyway: Docket answers the requests itself, approving what is inside the project and putting writes outside it on a card.
 - `--model <id>` passes a model to the agent.
 - The script returns at once with one line: `dispatched in background: …`. You get no completion notice, on purpose.
 
@@ -46,5 +46,5 @@ When the user says something more about a handed-off task (go on, a correction, 
 ## Requirements
 
 - OpenClaw Docket running (its service writes `~/Library/Application Support/docket/daemon.json`).
-- For OpenCode: the `opencode-dispatch` skill next to this one (from opencode-openclaw-inbox).
+- For OpenCode: nothing else. With an OpenCode older than 2.2 (or the Docket service not running), the `opencode-dispatch` skill next to this one (from opencode-openclaw-inbox) starts the session instead, and Docket picks it up.
 - For Claude Code or Codex: the `claude` or `codex` CLI installed and logged in.
