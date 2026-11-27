@@ -647,6 +647,28 @@ class ObserveMode(Watched):
         self.assertEqual(self.row()["state"], "awaiting")
         self.assertEqual(self.db.execute("select outcome from turns").fetchone()[0], "send_failed")
 
+    def test_a_dispatch_registered_after_its_run_ended_gets_the_pms_card(self):
+        """Registered a day late (the event stream was down when it started): its run is over, so the PM verifies it."""
+        found = {"session_key": "k", "seq": 1, "time": T0, "directory": str(self.project), "directory_raw": None,
+                 "brief": "", "instruction": "add a running log", "title": "Late"}
+        self.world.add_session("ses_late", "🦞 Late")
+        self.world.start("ses_late", "add a running log")
+        for _ in range(12):
+            self.world.work("ses_late")
+        self.clock[0] += 3600_000
+        self.world.end("ses_late", "succeeded")
+        self.clock[0] += 86400_000
+        with mock.patch.object(daemon.registry, "find_dispatch", lambda *a: found), \
+                mock.patch.object(daemon.registry, "build_context", lambda *a: []):
+            self.docket.maybe_register("ses_late", attempts=1)
+        self.answers.append(dict(CARD, progress="the running log is in"))
+        self.tick()
+        self.assertEqual(self.sent, [])  # never sent again
+        card = ledger.open_card(self.db, "ses_late")
+        self.assertEqual(json.loads(card["body"])["progress"], "the running log is in")
+        turn = self.db.execute("select outcome from turns where delegation_id = 'ses_late'").fetchone()
+        self.assertEqual(turn["outcome"], "succeeded")
+
     def test_a_stray_pm_answer_waits_on_a_card_instead_of_running(self):
         self.relay("first piece")
         self.world.end("ses_x", "succeeded")

@@ -664,6 +664,13 @@ class Docket:
                 return
             if seen is None and not self.unreachable_too_long(row["id"]):
                 return  # cannot read OpenCode at all: never resend blind until that has lasted a grace period
+            outcome = self.ended_unseen(turn)
+            if outcome:
+                # It ran and finished before the docket saw it start (registered late, or its message has
+                # scrolled out of the newest ones): a run end, for the PM to verify, never a resend.
+                db.execute("update turns set confirmed_at = ? where id = ? and confirmed_at is null", (now, turn["id"]))
+                ledger.log(db, row["id"], "watchdog:ended-unseen", {"turn": turn["id"], "outcome": outcome})
+                return self.on_run_end(row["id"], outcome, session=turn["session"])
             if not self.acting:
                 return self.observe(row["id"], turn, "send it again", "not started", after_ms=now - turn["started_at"])
             if not ledger.end_turn(db, turn["id"], "not_started"):
@@ -694,6 +701,19 @@ class Docket:
         ledger.set_phase(db, row["id"], "awaiting_dispatch", why="quiet")
         ledger.set_state(db, row["id"], "pending")
         self.submit(row["id"], self.recover, row["id"], turn["id"], self.t("why_quiet", minutes=QUIET_AFTER // 60_000), True)
+
+    def ended_unseen(self, turn) -> str | None:
+        """The session's outcome when it went busy after the turn was handed over and is idle again, else None."""
+        try:
+            session = Service().session(turn["session"])
+        except Exception:
+            return None
+        times = session.get("time") or {}
+        busy, idle = times.get("busy") or 0, times.get("idle") or 0
+        outcome = session.get("outcome")
+        if outcome in TERMINAL_OUTCOMES and idle > busy >= turn["started_at"] - 2000:
+            return outcome
+        return None
 
     def unreachable_too_long(self, delegation_id: str) -> bool:
         """OpenCode could not be read for a whole grace period: count that as not started too."""
