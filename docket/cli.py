@@ -4,6 +4,7 @@
     docket status <handoff>          state, phase and each phase change, rounds, the last events,
                                      the OpenCode session and when it last said something
     docket list                      the handoffs still open, with their ids
+    docket doctor                    every link Docket depends on, and the fix for each that fails
 
 <handoff> is the id (ses_…) or any unique prefix of it, with or without ses_.
 Only the docket writes to OpenCode and wakes PMs: `note` goes through the running service,
@@ -179,8 +180,14 @@ def main(argv=None):
         print(status(rest[0]))
     elif command == "list" and not rest:
         print(listing())
+    elif command == "doctor" and not rest:
+        from docket import doctor
+
+        text, code = doctor.report()
+        print(text)
+        sys.exit(code)
     else:
-        fail('usage: docket note <handoff> "<text>" [--from <who>] | docket status <handoff> | docket list', 2)
+        fail('usage: docket note <handoff> "<text>" [--from <who>] | docket status <handoff> | docket list | docket doctor', 2)
 
 
 if __name__ == "__main__":
