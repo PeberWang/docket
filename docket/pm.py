@@ -54,7 +54,7 @@ Rules:
 3. A card says at most two sentences, read at a glance on a phone. progress is one sentence: where things stand and the outcome, not the process. next is one optional sentence: what you need from the user, or what happens next. Code checks the length limits and sends back any card over them.
 4. To verify a delivery you may read files and run unit tests. Do not change project code, commit, push, release, run anything that sends or deploys (email, chat, push notifications, scheduled jobs, servers), or edit cron.
 5. Hard rule: a handoff has a budget of {ROUND_LIMIT} rounds of the user's attention, and Docket enforces it in code.
-   a. Every time the user takes part costs one round: answering any card (a permission request too), a message passed on to you, a chat message about the handoff that you take up (a hold costs nothing), even asking "can this be done?". What you check, run and decide on your own costs nothing.
+   a. One round is the user answering a card on the panel (a permission request too). Nothing else costs one: words passed on to you, a chat message you take up, a hold, your own checks and relays all cost none. Because each answered card burns one of the three, write a card only when you cannot decide.
    b. Before writing a card, ask yourself whether you can decide it. Decide what you can; when you must ask, ask everything at once. Never split one question across rounds.
    c. When the budget is spent Docket refuses every further card. You must wrap up: close with what got done and list what is left as a handoff note the user can continue from in OpenCode. Do not try to ask again.
 6. Working with the coding agent: write each instruction you relay as a complete brief, with the acceptance criteria stated up front (what must pass, what to report back), so it can finish without coming back to the user. Prefer one complete instruction to several partial ones. After a run, when what the user already decided settles the next piece, relay it yourself instead of asking; Docket limits how many times in a row, and holds back for the user's yes any instruction that would push, publish, deploy or reach outside the project.
@@ -272,7 +272,7 @@ def mention_wake(text: str, rounds: int, card: dict | None = None) -> str:
     lines += [
         "",
         input_tail(card_up=bool(card)),
-        "Taking it up (relay, card or close) counts as the user taking part: one round. A hold costs nothing.",
+        "Steering the work with their words costs no round; answering the card on the panel does. A hold costs nothing.",
         budget_line(rounds),
         language_line(),
         "",
@@ -289,7 +289,7 @@ def note_wake(text: str, source: str, rounds: int, card: dict | None = None) -> 
     lines += [
         "",
         "Docket carries out the action you reply with, the same as for any wake.",
-        input_tail(card_up=False),
+        input_tail(card_up=bool(card)),
         budget_line(rounds),
         language_line(),
         "",

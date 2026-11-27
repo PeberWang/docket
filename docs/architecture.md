@@ -133,14 +133,9 @@ The conclusion reaches OpenClaw twice. It is injected into the next turn of the 
 
 ## 7. The person's attention
 
-**Rounds.** A handoff may take the person's attention three times (`round_limit`). One round is:
+**Rounds.** A handoff may take the person's attention three times (`round_limit`). One round is exactly one thing: the person answering a card, on the panel or in the chat when the judge reads the answer off their words. Nothing else costs a round: words passed on with `docket note`, a chat message the PM takes up, a `hold`, the PM's own relays, Docket's retries, takeovers and hand-backs are all free. The budget is about the person's attention on decisions, not about how often the work moves. At the limit, only the limit card is shown, and the person closes or takes over.
 
-- answering a card on the panel;
-- a `docket note`;
-- a chat message that the judge found answers an open card;
-- a chat message the PM turned into an instruction.
-
-These are not rounds: chat messages the PM keeps as context (`hold`), Docket's retries, takeovers and hand-backs. At the limit, only the limit card is shown, and the person closes or takes over.
+**Old cards.** A card leaves the panel when it is answered, when the handoff ends, or earlier when it is moot: only the newest question stands, a question takes the panel from news, newer news replaces older news, and a permission request is never superseded. What is left expires after `quiet_expire_minutes` (12 hours) and closes the handoff with a note; a card for Docket's own fault never expires, and a card is never closed just because a run ended.
 
 **Continuing without the person.** After a run ends, the PM may relay the next piece itself when the brief already settles it. This is how a handoff moves forward without the person, and it costs no round. It is bounded:
 

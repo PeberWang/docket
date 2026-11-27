@@ -259,20 +259,27 @@ def push_card(conn, delegation_id: str, kind: str, body: dict) -> tuple[int, boo
     so it must not be skipped either. Answered cards drop out of the list entirely.
     Returns (card id, queued).
 
-    The one exception is a question: only the newest unanswered question stands. An older
-    one (never a permission request, which OpenCode is still waiting on) is superseded, and
-    if it was the card on show the new question takes its place instead of queueing.
+    Two cards never stand in each other's way: a question (or a report that carries a decision)
+    supersedes older questions, and news (a report without decisions) supersedes older news. So
+    the panel always shows the newest question, or the newest news, never a queue of stale ones
+    (2026-11-27: old cards must go when they are moot). A permission request is never superseded:
+    OpenCode is still waiting on it.
     """
     took_place = False
-    if kind == "question" and not body.get("pending_permission"):
-        shown = open_card(conn, delegation_id)
-        for old in conn.execute(
-            "select id, body from cards where delegation_id = ? and resolved_at is null and kind = 'question'", (delegation_id,)
-        ).fetchall():
-            if json.loads(old["body"]).get("pending_permission"):
-                continue
+    shown = open_card(conn, delegation_id)
+    decision = kind == "question" or bool(body.get("decisions"))
+    newest_question = decision and not body.get("pending_permission")
+    for old in conn.execute(
+        "select id, kind, body from cards where delegation_id = ? and resolved_at is null and kind in ('question', 'report')", (delegation_id,)
+    ).fetchall():
+        old_body = json.loads(old["body"])
+        if old_body.get("pending_permission"):
+            continue
+        old_question = old["kind"] == "question" or bool(old_body.get("decisions"))
+        is_news = kind == "report" and not body.get("decisions")
+        if newest_question or (is_news and not old_question):  # a question takes the panel; news gives way to news
             resolve_card(conn, old["id"], {"action": "superseded"})
-            log(conn, delegation_id, "card:superseded", {"card": old["id"], "by": "question"})
+            log(conn, delegation_id, "card:superseded", {"card": old["id"], "by": "question" if newest_question else "report"})
             took_place = took_place or (shown is not None and shown["id"] == old["id"])
     queued = open_card(conn, delegation_id) is not None or (not took_place and bool(
         conn.execute("select 1 from cards where delegation_id = ? and resolved_at is null and queued = 1", (delegation_id,)).fetchone()

@@ -190,7 +190,6 @@ class Stale(unittest.TestCase):
         self.assertEqual(self.state(), "running")
         self.assertEqual(json.loads(self.row(card)["resolution"])["settled"], "relay")
         self.assertEqual(self.events("relayed")[0]["via"], "chat")
-        self.assertEqual(self.docket.relayed_count("ses_s"), 1)  # paid for by the round the chat answer spent
 
     def test_a_card_the_chat_made_moot_is_closed_as_void(self):
         card = self.card(2)
@@ -469,7 +468,7 @@ class Stale(unittest.TestCase):
         self.docket.settings.update(quiet_expire_minutes=0, quiet_wake_minutes=-5)
         self.docket.sweep_stale()
         self.assertIsNone(self.row(card)["resolved_at"])
-        self.assertEqual(self.docket.minutes_ms("quiet_expire_minutes"), 1440 * 60_000)
+        self.assertEqual(self.docket.minutes_ms("quiet_expire_minutes"), 720 * 60_000)
 
     def test_the_grace_starts_when_the_feature_first_runs(self):
         card = self.card(30)

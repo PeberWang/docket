@@ -33,6 +33,9 @@ class Flows(unittest.TestCase):
             def prompt(self, sid, text):
                 sent.append(text)
 
+            def last_reply(self, sid):
+                return ""
+
         daemon.Service = engines.Service = FakeService
         # Never start real agents from a test: every engine's follow-up is recorded instead.
         engines.OpenCode.resume = lambda engine, handoff, text, model=None, **sent_as: sent.append(text)
@@ -63,12 +66,12 @@ class Flows(unittest.TestCase):
     def rounds(self):
         return self.docket.delegation("ses_x")["rounds"]
 
-    def test_a_chat_mention_the_pm_takes_up_goes_out_and_costs_one_round(self):
-        """The person's words in the chat steer the work directly (architecture, section 3, step 5)."""
+    def test_a_chat_mention_the_pm_takes_up_goes_out_and_costs_no_round(self):
+        """Steering the work with words is free; only answering a card is a round (2026-11-27)."""
         self.answers.append({"action": "relay", "message": "Use the blue theme."})
         self.mention("用蓝色主题")
         self.assertEqual(self.sent, ["Use the blue theme."])
-        self.assertEqual(self.rounds(), 1)
+        self.assertEqual(self.rounds(), 0)
         self.assertIsNone(ledger.open_card(self.db, "ses_x"))
 
     def from_main_chat(self, seq: int = 7):
@@ -79,33 +82,27 @@ class Flows(unittest.TestCase):
             transcript_messages=lambda conn, session_id, since=0: [mock.Mock(seq=seq, role="user")],
         ), mock.patch.object(daemon.transcript, "session_id_for", lambda conn, key: "CHAT")
 
-    def test_one_chat_message_passed_on_twice_costs_one_round(self):
-        """The judge's reading and the main agent's docket note of the same words: one round, either order."""
-        message = mock.Mock(seq=7, text="用蓝色主题", time=10, role="user")
-        answer = {"choice": "ses_x", "belongs": 0.95, "new_work": 0.1}
-        with mock.patch.object(daemon.relevance, "attribute", lambda *a: (answer, None)), \
-                mock.patch.object(daemon.relevance, "should_move", lambda *a: True):
-            self.answers.append({"action": "relay", "message": "Use the blue theme."})
-            self.docket.attribute(message, [], [self.docket.delegation("ses_x")], "CHAT")
+    def test_a_note_that_only_passes_words_on_costs_no_round(self):
+        self.answers.append({"action": "relay", "message": "Rename the header."})
+        patches, session = self.from_main_chat(seq=9)
+        with patches, session:
+            self.docket.note("ses_x", "标题顺手改个名", "agent:main:main")
+        self.assertEqual((self.sent, self.rounds()), (["Rename the header."], 0))
+
+    def test_a_note_the_pm_reads_as_the_answer_is_the_round(self):
+        card = self.awaiting_card()
+        self.answers.append({"action": "relay", "message": "Sort by date.", "settles_card": True})
+        patches, session = self.from_main_chat(seq=10)
+        with patches, session:
+            self.docket.note("ses_x", "按时间排", "agent:main:main")
         self.assertEqual(self.rounds(), 1)
-        patches, session = self.from_main_chat()
+        self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (card,)).fetchone()[0])
+        # The same note with no card to answer, or not read as the answer, costs nothing.
+        self.answers.append({"action": "relay", "message": "Sort by name."})
+        patches, session = self.from_main_chat(seq=11)
         with patches, session:
-            self.answers.append({"action": "hold", "note": "already sent"})
-            self.docket.note("ses_x", "用户说用蓝色主题", "agent:main:main")
-        self.assertEqual((self.rounds(), self.sent), (1, ["Use the blue theme."]))
-        # The other way round: the note comes first, and the judge's later reading of m8 is not acted on.
-        patches, session = self.from_main_chat(seq=8)
-        with patches, session:
-            self.answers.append({"action": "relay", "message": "Make the header blue too."})
-            self.docket.note("ses_x", "标题也改蓝", "agent:main:main")
-        self.assertEqual(self.rounds(), 2)
-        message = mock.Mock(seq=8, text="标题也改蓝", time=10, role="user")
-        with mock.patch.object(daemon.relevance, "attribute", lambda *a: (answer, None)), \
-                mock.patch.object(daemon.relevance, "should_move", lambda *a: True):
-            self.docket.attribute(message, [], [self.docket.delegation("ses_x")], "CHAT")
-        self.assertEqual(self.rounds(), 2)
-        self.assertEqual(self.sent, ["Use the blue theme.", "Make the header blue too."])
-        self.assertTrue(self.db.execute("select 1 from events where kind = 'mention:claimed'").fetchone())
+            self.docket.note("ses_x", "还是按名字吧", "agent:main:main")
+        self.assertEqual(self.rounds(), 1)
 
     def test_a_chat_mention_the_pm_holds_costs_nothing(self):
         card = self.awaiting_card()
@@ -152,6 +149,8 @@ class Flows(unittest.TestCase):
         seen = []
         for i in range(3):
             self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress=f"q{i}")})
+            if i == 2:  # the third card is refused; the wrap-up note follows at once
+                self.answers.append({"action": "close", "conclusion": "all three answered; export left"})
             card = ledger.open_card(self.db, "ses_x")["id"] if i else self.awaiting_card()
             self.docket.decide(card, {}, f"answer {i}")
             seen.append(self.rounds())
@@ -308,7 +307,7 @@ class Flows(unittest.TestCase):
         self.awaiting_card()
         self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress="which date?")})
         self.mention("about the sorting")
-        self.assertEqual(self.rounds(), 2)
+        self.assertEqual(self.rounds(), 1)  # taking it up without answering a card costs none
 
     def test_replay_spends_nothing(self):
         self.answers.append({"action": "relay", "message": "first"})
@@ -395,6 +394,22 @@ class Flows(unittest.TestCase):
         self.assertIsNone(self.docket.finish("ses_x", "done again"))  # a PM job that finishes late
         self.assertEqual(self.db.execute("select count(*) from cards where kind = 'closed'").fetchone()[0], 1)
         self.assertEqual(next(daemon.MEMORY_DIR.glob("*.md")).read_text(encoding="utf-8").count("done"), 1)
+
+    def test_the_wrap_up_card_does_not_wait_forever(self):
+        """A limit card unanswered for 12 hours closes the handoff with its own conclusion."""
+        self.db.execute("update delegations set rounds = 3 where id = 'ses_x'")
+        self.answers.append({"action": "close", "conclusion": "List view done; export left."})
+        self.docket.wrap_up("ses_x")
+        card = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(card["kind"], "limit")
+        self.docket.sweep_limit_expiry()  # fresh: it waits
+        self.assertEqual(self.state(), "limit")
+        self.db.execute("update cards set shown_at = ? where id = ?", (ledger.now() - 13 * 3600_000, card["id"]))
+        self.docket.sweep_limit_expiry()
+        self.assertEqual(self.state(), "closed")
+        conclusion = json.loads(self.db.execute("select body from cards where kind = 'closed'").fetchone()[0])["conclusion"]
+        self.assertIn("export left", conclusion)
+        self.assertTrue(self.db.execute("select 1 from events where kind = 'limit:expired'").fetchone())
 
     # ---------- the docket's own failures never close a handoff ----------
 
@@ -586,21 +601,27 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.queued(), 0)
         self.assertEqual(self.state(), "awaiting")
 
-    def test_a_question_taking_the_place_of_the_shown_one_jumps_the_queue(self):
+    def test_a_question_clears_older_questions_and_stale_news(self):
         self.docket.show_card("ses_x", "question", dict(CARD, progress="old"))
         self.docket.show_card("ses_x", "report", dict(CARD, progress="report"))
         new = self.docket.show_card("ses_x", "question", dict(CARD, progress="new"))
         self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], new)
-        self.assertEqual(self.queued(), 1)  # the report still waits behind it
+        self.assertEqual(self.queued(), 0)  # the old question and the news it queued behind are both moot
 
-    def test_reports_failures_and_permission_requests_are_never_superseded(self):
+    def test_a_permission_request_is_never_superseded_and_news_never_waits_behind_news(self):
         report = self.docket.show_card("ses_x", "report", dict(CARD, progress="r"))
         self.docket.permission_card("ses_x", {"id": "per_1", "action": "shell", "resources": ["rm -rf /tmp/x"]})
         self.docket.show_card("ses_x", "question", dict(CARD, progress="q"))
-        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], report)
-        self.assertEqual(self.queued(), 2)
+        # The question takes the panel from the report; the permission card keeps its place in the queue.
+        question = ledger.open_card(self.db, "ses_x")
+        self.assertEqual(json.loads(question["body"])["progress"], "q")
+        self.assertEqual(self.queued(), 1)
+        self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (report,)).fetchone()[0])
+        # News never takes a question down: it waits its turn behind it.
+        newer = self.docket.show_card("ses_x", "report", dict(CARD, progress="r2"))
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], question["id"])
         unresolved = self.db.execute("select count(*) from cards where delegation_id='ses_x' and resolved_at is null").fetchone()[0]
-        self.assertEqual(unresolved, 3)
+        self.assertEqual(unresolved, 3)  # the question, the permission, the newer report
 
     def test_sweep_supersedes_an_orphan_and_lifts_the_queue(self):
         orphan = ledger.add_card(self.db, "ses_x", "question", dict(CARD, progress="orphan"))
@@ -653,27 +674,20 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.state(), "awaiting")
         self.assertFalse(hasattr(self.docket, "sweep_awaiting"))
 
-    def test_answering_shows_the_next_card_in_order(self):
-        first = self.docket.show_card("ses_x", "report", dict(CARD, progress="first"))
-        second = self.docket.show_card("ses_x", "report", dict(CARD, progress="second"))
-        self.assertEqual(self.state(), "awaiting")
-        # The first answer goes to OpenCode; the second report, waiting behind it, comes up.
-        self.answers.append({"action": "relay", "message": "a"})
-        self.docket.decide(first, {}, "go on")
-        self.assertEqual(self.sent, ["a"])
-        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], second)
-        self.assertEqual(self.state(), "awaiting")
-        self.answers.append({"action": "relay", "message": "b"})
-        self.docket.decide(second, {}, "fine")
-        self.assertEqual(self.sent, ["a", "b"])
-        self.assertEqual(self.state(), "running")
-        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
-        # The run ends: pending while the PM writes, awaiting once its card is up.
-        self.answers.append(dict(CARD, progress="done"))
-        engines.OpenCode.last_reply = lambda engine, handoff: "finished"
-        self.docket.on_run_end("ses_x", "succeeded")
-        self.assertEqual(self.state(), "awaiting")
-        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "done")
+    def test_only_the_newest_question_and_the_newest_news_stand(self):
+        """Old cards must go when they are moot: news never queues behind newer news (2026-11-27)."""
+        old_report = self.docket.show_card("ses_x", "report", dict(CARD, progress="first"))
+        question = self.docket.show_card("ses_x", "question", dict(CARD, kind="question", progress="decide"))
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], question)  # a question takes the panel
+        self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (old_report,)).fetchone()[0])
+        news = self.docket.show_card("ses_x", "report", dict(CARD, progress="second"))
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], question)  # news never takes a question down
+        self.answers.append({"action": "relay", "message": "go"})
+        self.docket.decide(question, {}, "go on")
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], news)  # and it goes up once the question is answered
+        newer = self.docket.show_card("ses_x", "report", dict(CARD, progress="third"))
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], newer)  # newer news replaces older news
+        self.assertEqual(self.db.execute("select count(*) from cards where delegation_id = 'ses_x' and resolved_at is null").fetchone()[0], 1)
 
     def test_a_permission_card_takes_its_turn_like_any_other(self):
         self.docket.show_card("ses_x", "question", dict(CARD, progress="brief"))
@@ -732,7 +746,6 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.sent, ["go on", "next piece"])
         self.assertEqual(self.state(), "running")
         self.assertEqual((self.rounds(), self.handbacks()), (1, 1))  # rounds kept, not refilled
-        self.assertEqual(self.docket.relayed_count("ses_x"), 1)  # the handback's relay is not one an answer paid for
         self.assertEqual(self.db.execute("select count(*) from events where delegation_id = 'ses_x' and kind = 'handback'").fetchone()[0], 1)
         self.assertEqual(ledger.snapshot(self.db)[0]["handbacks"], 1)
         # Back under the docket's care: the next run end is a card again.
@@ -768,7 +781,8 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.handbacks(), 2)
 
     def test_a_card_left_waiting_goes_up_on_handback(self):
-        shown = self.docket.show_card("ses_x", "report", dict(CARD, progress="shown"))
+        # A permission card is never superseded, so it keeps the panel and the news waits behind it.
+        shown = self.docket.show_card("ses_x", "question", dict(CARD, pending_permission="per_1", progress="shown"))
         waiting = self.docket.show_card("ses_x", "report", dict(CARD, progress="waiting"))
         self.take_over()  # resolves the card on show; the one behind it is still queued
         self.answers.append({"action": "relay", "message": "carry on"})
@@ -784,6 +798,7 @@ class Flows(unittest.TestCase):
         self.take_over()  # taking over is one of the two ways out of the limit
         # The PM may not ask again: its card is refused, the limit card comes back, rounds stay at 3.
         self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress="one more?")})
+        self.answers.append({"action": "close", "conclusion": "stopped at the limit"})  # the wrap-up note
         self.docket.handback("ses_x")
         self.assertEqual(self.state(), "limit")
         self.assertEqual(ledger.open_card(self.db, "ses_x")["kind"], "limit")

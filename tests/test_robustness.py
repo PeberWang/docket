@@ -174,7 +174,9 @@ class Watched(unittest.TestCase):
         def ask(key, message, validate, record=None):
             test.pm_messages.append(message)
             answer = test.answers.pop(0)
-            self.assertEqual(validate(answer), [], answer)
+            errors = validate(answer)
+            if errors:  # what pm.ask does with an answer it cannot use
+                raise pm.PMFailed([{"attempt": 1, "model": None, "raw": json.dumps(answer, ensure_ascii=False), "errors": errors}])
             world.pm_say("assistant", json.dumps(answer, ensure_ascii=False))  # the docket's own wake, in the transcript
             return answer
 
@@ -297,36 +299,17 @@ class Robustness(Watched):
         self.assertIn("Docket's record of your previous action: relay, handed to OpenCode", self.pm_messages[-1])
         self.assertIn("OpenCode was seen working on it", self.pm_messages[-1])
 
-    def test_1_orphan_on_a_closed_handoff_stalls_with_a_card_that_says_why(self):
-        """Today's case exactly: the handoff had closed, the main chat asked the PM to go on."""
+    def test_1_an_orphan_on_a_closed_handoff_is_dropped_never_asked_about(self):
+        """Never a card asking whether the main agent's words were meant (2026-11-27)."""
         self.tick()
         self.docket.finish("ses_x", "done")
         self.inject_orphan({"action": "relay", "message": "continue: the three views"})
-        self.until(lambda: self.row()["state"] != "closed", 120)
-        card, body = self.open_card_body()
-        self.assertTrue(body["stalled"] and body["docket_fault"])
-        self.assertEqual(self.row()["phase"], "stalled")
-        self.assertIn("sessions_send", body["progress"])
-        self.assertIn("continue: the three views", body["progress"])
-        self.assertEqual(self.sent, [])
-        shown = ledger.snapshot(self.db)[0]
-        self.assertEqual(shown["phase"], "stalled")
-        self.assertTrue(shown["card"]["stalled"])
-        self.assertNotIn("orphan", shown["card"])
-        self.docket.decide(card["id"], {"retry": "yes"}, "")
-        self.assertEqual(self.sent, [("ses_x", "continue: the three views")])
-        self.assertEqual(self.row()["state"], "running")
-        self.assertEqual(self.row()["rounds"], 0)  # the docket's own fault: no round
-
-    def test_1_orphan_card_can_be_left_undone(self):
         self.tick()
-        self.docket.finish("ses_x", "done")
-        self.inject_orphan({"action": "relay", "message": "x"})
         self.tick()
-        card, _ = self.open_card_body()
-        self.docket.decide(card["id"], {"retry": "no"}, "")
         self.assertEqual(self.row()["state"], "closed")
         self.assertEqual(self.sent, [])
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
+        self.assertEqual(self.events("orphan:dropped")[0]["action"], "relay")
 
     def test_1_a_message_before_a_docket_wake_is_folded_into_it(self):
         self.tick()
@@ -560,12 +543,13 @@ class Robustness(Watched):
 
     # ---------- the way in for everyone else ----------
 
-    def test_note_wakes_the_pm_the_dockets_way_and_costs_a_round(self):
+    def test_note_wakes_the_pm_the_dockets_way_and_a_card_answer_is_the_round(self):
         card = ledger.add_card(self.db, "ses_x", "question", dict(CARD, kind="question"))
         ledger.set_state(self.db, "ses_x", "awaiting")
-        self.answers.append({"action": "relay", "message": "do the blue theme"})
+        self.answers.append({"action": "relay", "message": "do the blue theme", "settles_card": True})
         result = self.docket.note("x", "用蓝色主题", source="agent:main:main")  # a prefix is enough
-        self.assertEqual(result, {"id": "ses_x", "rounds": 1})
+        self.assertEqual(result["id"], "ses_x")
+        self.assertEqual(self.row()["rounds"], 1)  # the PM read the words as the card's answer
         self.assertIn("用蓝色主题", self.pm_messages[-1])
         self.assertIn("agent:main:main", self.pm_messages[-1])
         self.assertEqual(self.sent, [("ses_x", "do the blue theme")])
@@ -631,15 +615,15 @@ class Robustness(Watched):
         self.relay()
         self.until(lambda: self.row()["phase"] == "running", 200)  # stuck once, healed once
         self.tick()
+        self.docket.fail_card("ses_x", "a stalled card", extra={"stalled": True})
+        self.tick()
         self.docket.finish("ses_x", "done")
-        self.inject_orphan({"action": "relay", "message": "x"})
-        self.tick()  # stuck again, needs a person
         day = time.localtime(self.clock[0] / 1000)
         import datetime as dt
         when = dt.date(day.tm_year, day.tm_mon, day.tm_mday)
         self.docket.write_health(when)
         report = json.loads((self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.json").read_text(encoding="utf-8"))
-        self.assertEqual((report["stuck"], report["healed"], report["needed_a_person"]), (2, 1, 1))
+        self.assertEqual((report["stuck"], report["healed"], report["needed_a_person"]), (1, 1, 1))
         self.assertIn("needed a person: 1", (self.tmp / "health" / f"{when:%Y-%m-%d}" / "health.md").read_text(encoding="utf-8"))
 
 
@@ -820,7 +804,8 @@ class ObserveMode(Watched):
         phases = [e[0][6:] for e in self.db.execute("select kind from events where delegation_id = 'ses_late' and kind like 'phase:%' order by id")]
         self.assertEqual(phases, ["dispatching", "verifying", "awaiting_user"])
 
-    def test_a_stray_pm_answer_waits_on_a_card_instead_of_running(self):
+    def test_a_stray_pm_answer_runs_without_asking_and_takes_its_card_down(self):
+        """Never a card asking whether the main agent's words were meant (2026-11-27)."""
         self.relay("first piece")
         self.world.end("ses_x", "succeeded")
         self.answers.append(dict(CARD, progress="first piece done"))
@@ -828,12 +813,10 @@ class ObserveMode(Watched):
         self.tick()
         self.sent.clear()
         self.inject_orphan({"action": "relay", "message": "continue: the three views"})
-        self.until(lambda: self.events("orphan:found"), 120)
-        self.assertEqual(self.sent, [])
-        self.assertEqual(self.events("orphan:executed"), [])
-        waiting = [json.loads(r[0]) for r in self.db.execute("select body from cards where delegation_id = 'ses_x' and resolved_at is null")]
-        self.assertEqual(waiting[0]["progress"], "first piece done")  # the user's card stays up
-        self.assertTrue(any(b.get("orphan") for b in waiting))  # the stray answer waits behind it, to be decided
+        self.until(lambda: self.events("orphan:executed"), 120)
+        self.assertEqual(self.sent, [("ses_x", "continue: the three views")])
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))  # the card the answer moved past is down
+        self.assertFalse(any(json.loads(r[0]).get("orphan") for r in self.db.execute("select body from cards where delegation_id = 'ses_x' and resolved_at is null")))
 
 
 class TranscriptKeys(unittest.TestCase):

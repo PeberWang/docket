@@ -515,7 +515,8 @@ class Docket:
             time.sleep(HEARTBEAT)
 
     def sweep_minute(self):
-        for name, check in (("orphan", self.sweep_orphans), ("stale", self.sweep_stale), ("running", self.sweep_running)):
+        for name, check in (("orphan", self.sweep_orphans), ("stale", self.sweep_stale), ("limit", self.sweep_limit_expiry),
+                            ("running", self.sweep_running)):
             try:
                 check()
             except Exception:
@@ -1104,22 +1105,14 @@ class Docket:
             ledger.log(db, row["id"], "orphan:ignored", {"seq": found[-1]["seq"], "state": state, **({} if self.acting else {"observing": True})})
             return None
         action = latest["action"]
-        # A relay into a session still at work (or one that cannot be read) could cross another run.
-        crossing = action["action"] == "relay" and self.session_busy(row) is not False
-        # Observing, a stray answer is never carried out on its own: a person decides on the card.
-        if state in ("closed", "limit", "pending") or crossing or not self.acting:
-            # Ended, at the limit, or OpenCode is still at work: a person decides, on a card that says what happened.
-            summary = action.get("message") or action.get("conclusion") or (action.get("card") or {}).get("progress") or ""
-            ledger.set_phase(db, row["id"], "stalled", orphan=latest["seq"])
-            self.fail_card(
-                row["id"], self.t("orphan", source=latest["source"], action=f"{action['action']}: {summary[:120]}"),
-                self.rescue_orphan, (row["id"], json.dumps(action, ensure_ascii=False)),
-                error=f"orphan PM turn (seq {latest['seq']})", extra={"stalled": True, "orphan": {"was": state, "seq": latest["seq"]}},
-                question=self.t("orphan_question"),
-                options=[{"id": "yes", "label": self.t("orphan_run"), "recommended": True}, {"id": "no", "label": self.t("orphan_skip"), "recommended": False}],
-                reopen=state == "closed",  # a closed handoff opens again to ask; a taken-over one stays the person's
-            )
+        if state in ("closed", "limit"):
+            # Nothing may go out for a handoff that has ended or spent its budget: dropped, never asked about.
+            ledger.log(db, row["id"], "orphan:dropped", {"seq": latest["seq"], "state": state, "action": action["action"]})
             return None
+        # The words came in through the main agent, and the PM answered them: carry the answer out like
+        # any other. Never a card asking the person whether they meant it (2026-11-27): they asked the
+        # main agent to do it, and the user has no attention to spare for confirming it. The risk checks
+        # in carry_out still hold, and a busy session takes the instruction at its next step.
         ledger.log(db, row["id"], "orphan:auto", {"seq": latest["seq"], "action": action["action"]})
         ledger.set_state(db, row["id"], "pending")
         return (self.rescue_orphan, row["id"], json.dumps(action, ensure_ascii=False))
@@ -1156,8 +1149,9 @@ class Docket:
         """docket note / the panel's "pass a word on": the one way in for anyone but the docket.
 
         The text is logged, then the PM is woken the docket's way and its action carried out.
-        Someone taking part costs a round, like answering a card; a card of the PM's own that
-        is up is answered by it. A closed handoff opens again; a taken-over one is refused.
+        A card of the PM's own that is up is answered by it, and that answer is the round; passing
+        words on with no card to answer costs none. A closed handoff opens again; a taken-over
+        one is refused.
         """
         text = (text or "").strip()
         if not text:
@@ -1172,22 +1166,14 @@ class Docket:
         ledger.log(db, row["id"], "note", {"text": text[:2000], "source": source})
         card = ledger.open_card(db, row["id"])
         body = json.loads(card["body"]) if card else {}
-        answers = card is not None and card["kind"] not in ("limit", "closed") and not (
-            body.get("pending_permission") or body.get("pending_relay") or body.get("docket_fault"))
+        # A card is answered only if the PM says these words answer it (settles_card), and that is the
+        # round; passing words on costs none (2026-11-27). The card stays up until then.
+        rounds = row["rounds"]
         chat = self.claim_chat_message(source)
-        if chat and self.paid_for(row["id"], chat):
-            # The judge's reading of the same chat message was already taken up: one message, one round.
-            rounds = row["rounds"]
-            ledger.log(db, row["id"], "note:same-message", {"chat": chat})
-        else:
-            rounds = ledger.spend_round(db, row["id"], card["id"] if answers else None, {"reply": text, "via": "note", "source": source})
-            if rounds is None:
-                rounds = ledger.spend_round(db, row["id"])
-            if chat:
-                ledger.log(db, row["id"], "chat:paid", {"chat": chat, "via": "note"})
         was = row["state"]
         ledger.set_state(db, row["id"], "pending", force=True)  # a note opens a closed handoff again
-        self.submit(row["id"], self.act, row["id"], pm.note_wake(text, source, rounds, body if answers else None), text, "note", None, was)
+        shown = body if card is not None and self.answerable(card) else None
+        self.submit(row["id"], self.act, row["id"], pm.note_wake(text, source, rounds, shown), text, "note", None, was)
         return {"id": row["id"], "rounds": rounds}
 
     def claim_chat_message(self, source: str | None) -> str | None:
@@ -1510,6 +1496,24 @@ class Docket:
             shown = self.show_card(delegation_id, action["card"].get("kind", "question"), {**action["card"], "quiet_since": start, "quiet_woken": True})
             self.executed(delegation_id, "card", card=shown)
         self.check_limit(delegation_id)
+
+    def sweep_limit_expiry(self):
+        """The wrap-up card at the limit is not a question waiting forever: nothing more can run, and
+        the handoff note is already written. Unanswered for quiet_expire_minutes, it closes the handoff
+        with its own conclusion, so no handoff sits at the limit for days (2026-11-27)."""
+        db = self.db()
+        for row in db.execute("select * from delegations where state = 'limit'").fetchall():
+            card = ledger.open_card(db, row["id"])
+            if not card or card["kind"] != "limit":
+                continue
+            waited = ledger.now() - self.card_clock(card, json.loads(card["body"]))
+            if waited < self.minutes_ms("quiet_expire_minutes"):
+                continue
+            note = json.loads(card["body"]).get("wrap_up") or {}
+            ledger.log(db, row["id"], "limit:expired", {"card": card["id"], "after_ms": waited})
+            log.info("limit card %s on %s unanswered for %d hours, closed", card["id"], row["id"], waited // 3600_000)
+            self.finish(row["id"], note.get("conclusion") or self.t("closed_fallback"), note.get("remaining"),
+                        extra={"auto_expired": {"by": "limit-expiry", "reason": "no reply", "after_ms": waited}})
 
     def quiet_expire(self, delegation_id: str, card_id: int, waited: int):
         """Under the lock: nobody answered for quiet_expire_minutes. The docket closes it and says so."""
@@ -1861,7 +1865,10 @@ class Docket:
                 self.submit(row["id"], self.relay, row["id"], body["pending_relay"] + (f"\n\nThe user added: {reply}" if reply else ""))
             else:
                 # Declined: nothing runs because of it. A waiting card goes up, or the PM says what next.
-                self.check_limit(row["id"]) or self.settle(row["id"])
+                if self.check_limit(row["id"]):
+                    self.submit(row["id"], self.wrap_up, row["id"], "succeeded", None)
+                else:
+                    self.settle(row["id"])
             return
         # The person's own words, for the check on instructions that reach beyond the project.
         picked = [o["label"] for d in body.get("decisions") or [] for o in d.get("options") or [] if choices.get(d.get("id")) == o.get("id")]
@@ -1919,8 +1926,8 @@ class Docket:
         if now in ("closed", "taken_over"):  # taken over (again) or closed while the PM was thinking
             ledger.log(self.db(), delegation_id, "pm:dropped", {"action": kind, "state": now})
             return
-        if via == "mention" and kind != "hold" and not self.take_up_mention(delegation_id, said, action.get("settles_card"), chat):
-            return
+        if via in ("mention", "note") and kind != "hold" and action.get("settles_card"):
+            self.words_settle_card(delegation_id, said, chat)
         self.carry_out(delegation_id, action, via, said)
         if kind == "hold" and was and self.delegation(delegation_id)["state"] == "pending":
             # Only the wake needed "pending": the person said something for the record and nothing follows.
@@ -1935,22 +1942,20 @@ class Docket:
         body = json.loads(card["body"])
         return not (body.get("pending_permission") or body.get("pending_relay") or body.get("docket_fault"))
 
-    def take_up_mention(self, delegation_id: str, said: str | None, settles: bool | None, chat: str | None = None) -> bool:
-        """The PM took a chat message up: the person took part, one round, with the card it answers if it settles one."""
+    def words_settle_card(self, delegation_id: str, said: str | None, chat: str | None = None) -> bool:
+        """The person's words answered the card on the panel: that is the round (2026-11-27). False when
+        there was no card to answer, or it was answered on the panel in the same moment."""
         db = self.db()
-        if chat and self.paid_for(delegation_id, chat):  # a note passed the same words on and paid for them
+        card = ledger.open_card(db, delegation_id)
+        if not self.answerable(card):
+            return False
+        if chat and self.paid_for(delegation_id, chat):  # the same message already answered it through another path
             ledger.log(db, delegation_id, "mention:paid", {"chat": chat})
             return True
-        if ledger.get(db, delegation_id)["rounds"] >= ledger.ROUND_LIMIT:
-            ledger.log(db, delegation_id, "mention:blocked", {"text": (said or "")[:200]})
-            self.enter_limit(delegation_id)
+        if ledger.spend_round(db, delegation_id, card["id"], {"reply": said, "via": "chat"}) is None:
             return False
-        card = ledger.open_card(db, delegation_id) if settles else None
-        card = card if self.answerable(card) else None
-        if ledger.spend_round(db, delegation_id, card["id"] if card else None, {"reply": said, "via": "chat"} if card else None) is None:
-            ledger.spend_round(db, delegation_id)  # the card was answered on the panel in the same moment
         if chat:
-            ledger.log(db, delegation_id, "chat:paid", {"chat": chat, "via": "mention"})
+            ledger.log(db, delegation_id, "chat:paid", {"chat": chat, "via": "words"})
         return True
 
     def carry_out(self, delegation_id: str, action: dict, via: str | None = None, said: str | None = None):
@@ -1974,7 +1979,10 @@ class Docket:
         else:
             self.finish(delegation_id, action["conclusion"], action.get("remaining"))
             self.executed(delegation_id, "close")
-        self.check_limit(delegation_id)
+        if self.check_limit(delegation_id) and kind == "card":
+            # Nothing goes out to carry the last round on, so the wrap-up would never be written:
+            # ask the PM for the handoff note now, so the limit card carries it (2026-11-27).
+            self.submit(delegation_id, self.wrap_up, delegation_id, "succeeded", None)
 
     def confirm_relay(self, delegation_id: str, message: str, danger: str, paid: bool):
         """A card asking the person whether an instruction that reaches beyond the project may go out.
@@ -1995,14 +2003,6 @@ class Docket:
         }
         return self.show_card(delegation_id, "question", card)
 
-    # Relays a round paid for. A fallback repeats one; a handback's, the PM's own continuation and a
-    # stray answer come free (the continuation has its own limit, see continues).
-    PAID_VIA = (None, "relay", "chat", "note", "mention")
-
-    def relayed_count(self, delegation_id: str) -> int:
-        rows = self.db().execute("select detail from events where delegation_id = ? and kind = 'relayed'", (delegation_id,)).fetchall()
-        return sum(1 for (detail,) in rows if json.loads(detail or "{}").get("via") in self.PAID_VIA)
-
     def continues(self, delegation_id: str) -> int:
         """Relays the PM made on its own after a run, since the person last took part."""
         db = self.db()
@@ -2015,13 +2015,8 @@ class Docket:
         return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else docket_config.DEFAULTS["continue_limit"]
 
     def relay(self, delegation_id: str, message: str, model: str | None = None, via: str | None = None, delivery: str | None = None):
-        """Hand an instruction to the coding agent. Rounds were spent when the person acted; the gate
-        here only stops more paid relays than the budget has rounds."""
-        row = self.delegation(delegation_id)
-        if via in self.PAID_VIA and (self.relayed_count(delegation_id) >= ledger.ROUND_LIMIT or row["rounds"] > ledger.ROUND_LIMIT):
-            ledger.log(self.db(), delegation_id, "relay:blocked", {"message": message[:200]})
-            self.enter_limit(delegation_id)
-            return False
+        """Hand an instruction to the coding agent. Rounds are the person's card answers; what the PM
+        relays on its own is bounded separately by continue_limit (see continues)."""
         turn = self.send(delegation_id, message, model, via=via or "relay", delivery=delivery)
         ledger.log(self.db(), delegation_id, "relayed", {"message": message[:500], **({"via": via} if via else {}), **({"delivery": delivery} if delivery else {})})
         # A card still on show (one left from before a handback), or one waiting behind the card just answered.
@@ -2302,9 +2297,9 @@ class Docket:
             ledger.log(self.db(), delegation_id, "mention:blocked", {"seq": message.seq})
             self.enter_limit(delegation_id)
             return
-        # The PM decides what the message means. Nothing is spent or answered yet: taking it up costs a
-        # round (take_up_mention), holding it costs nothing, and a card is answered only if the PM says
-        # the words settle it. The handoff keeps its state meanwhile: the panel shows what is true.
+        # The PM decides what the message means. Nothing is spent or answered here: steering the work
+        # costs no round, and the card is answered only if the PM says these words settle it. The handoff
+        # keeps its state meanwhile: the panel shows what is true.
         card = ledger.open_card(self.db(), delegation_id)
         up = json.loads(card["body"]) if self.answerable(card) else None
         chat = f"{session_id}:{message.seq}" if session_id else None
@@ -2652,7 +2647,8 @@ def health(db, start: int, end: int) -> dict:
         return json.loads(e["detail"] or "{}")
 
     stuck = events("watchdog:not-started", "watchdog:quiet", "orphan:found")
-    stuck += [e for e in events("turn:ended") if detail(e).get("outcome") in UNFINISHED]
+    # An interrupted run is a person's stop, not a fault (see on_run_end): it is not counted as stuck.
+    stuck += [e for e in events("turn:ended") if detail(e).get("outcome") in ("failed", "killed")]
     stuck += [e for e in events("docket:failed") if not detail(e).get("stalled")]  # the PM's own faults
     healed = [e for e in events("turn:running") if detail(e).get("via") == "resend"] + events("orphan:auto", "orphan:folded")
     human = events("docket:failed")

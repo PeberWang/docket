@@ -75,7 +75,7 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
         │ judge (Jev): your words that belong to the task; later mentions in chat   │
         │ ledger (SQLite): handoffs, briefs, decisions, rounds                      │
         │ PM: one OpenClaw session per handoff, woken when a run ends or you speak  │
-        │ verifies, moves the work on or asks you; taking part is one round (max 3) │
+        │ verifies, moves the work on or asks you; answering a card is one round (max 3)│
         └───────────────────────────────────────────────────────────────────────────┘
                                          ▲
                              Docket.app: menu bar + panel
@@ -84,7 +84,7 @@ your chat ── OpenClaw ──(desk-dispatch: start and return)──▶ OpenC
 - Code keeps watch, the model only judges: the PM is not a loop. It is woken once per finished run, and when you answer or pass a word on, with `openclaw agent --session-key agent:main:docket-<id>`, and nothing it writes goes to your chat.
 - After a run the PM verifies it, then hands the coding agent the next piece itself when what you already decided settles it, or asks you only what needs you. It does that at most `continue_limit` times in a row (5 by default) before it shows you where things stand, and an instruction that would push, publish, deploy or reach outside the project always waits for your yes.
 - When you close a handoff, a one-sentence conclusion goes into OpenClaw's daily memory, so your agent still knows what happened.
-- If you mention a handoff in the chat later, the judge recognises it and passes your words to its PM, which steers the work with them (one round), keeps them as background (no round) or asks you on the panel. When the main agent passes the same words on with `docket note`, they still count once.
+- If you mention a handoff in the chat later, the judge recognises it and passes your words to its PM, which steers the work with them, keeps them as background or asks you on the panel. Steering with words costs no round: only answering a card does. When the main agent passes the same words on with `docket note`, nothing is asked twice.
 - One writer: only the service hands instructions to the coding agent and wakes a PM, and only what a PM answers to the service is carried out. Anyone else (you, the main chat, another session) passes a word on with `docket note <handoff> "<text>"` or **Pass a word on** on the card.
 - A watchdog in the service follows every instruction it hands over, every 30 s. By default it only observes: it records what it would have done (`watchdog:observed` in the ledger, counted in the health summary), and a run that ended unfinished gets a PM card for you to decide. With `"watchdog": "act"` it steps in. The dispatch printing "dispatched" does not count: an instruction is running once its message is in the session and the session is busy. Not there within 90 s, or silent (no message, no file changed in the project) for 10 minutes, or ended interrupted, killed or failed: it is sent again once, in a new session told which files the last turn left when the old one is interrupted or stuck. A second miss marks the handoff stalled, with a card that says why and a retry. A PM answer that reached the PM some other way (a `sessions_send` into its session) is found within 2 minutes and carried out the service's way, or put on such a card. Each handoff's phase (`awaiting_dispatch`, `dispatching`, `running`, `awaiting_user`, `verifying`, `closed`, `stalled`) is in the ledger; `docket status <handoff>` prints it with every change, and a daily summary of how often work got stuck, healed itself or needed you goes to `~/.openclaw/workspace/cron-logs/docket/<date>/health.md`.
 
@@ -144,7 +144,7 @@ To remove it: `bash scripts/uninstall.sh` takes out the launch agents, the app, 
 | `stale_enabled` | `true` | look after cards nobody answers on the panel (the next three keys); `false` turns all of it off |
 | `stale_threshold` | `0.9` | how sure the judge must be that you answered a card in the chat, or made it moot, before its PM closes it or relays your answer (needs the judge and `attribute`) |
 | `quiet_wake_minutes` | `180` | a card unanswered this long, with the coding agent idle, wakes its PM once: it closes the card or asks one more specific question, never picks an option for you |
-| `quiet_expire_minutes` | `1440` | a card unanswered this long is closed by Docket itself and noted as expired. This is the only expiry: a card never closes just because the coding agent finished, and a card for Docket's own fault never expires. Both clocks start when the card goes up on the panel (not when a queued card was written), move on when the judge sees you still weighing it in the chat, and never before the first sweep with `stale_enabled` on |
+| `quiet_expire_minutes` | `720` | a card unanswered this long (12 hours) is closed by Docket itself and noted as expired. A card never closes just because the coding agent finished, and a card for Docket's own fault never expires. Old cards go earlier when they are moot: only the newest question and the newest news stand, a question takes the panel from news, and a permission request is never superseded. Both clocks start when the card goes up on the panel (not when a queued card was written), move on when the judge sees you still weighing it in the chat, and never before the first sweep with `stale_enabled` on |
 | `judge` | `{}` | `backend` (`"systemone"` or `"openai"`), `model`, `endpoint`, `keychain_service`; easier from Settings → Models |
 | `attribute` | `true` | recognise later mentions of a handoff in the chat |
 | `context_threshold` | `0.5` | how sure the judge must be to keep a message as background |
@@ -185,7 +185,7 @@ Development notes: offline tests with `python3 -I -m unittest discover -s tests 
 
 ### 编程代理：并行
 
-每件交办在后台有自己的编程代理会话，也有自己的项目经理 agent。OpenCode（或 Claude Code、Codex）每做完一轮，项目经理自己核实交付，替你定技术细节，只把真正需要你的事送上面板。往返满 3 轮，或者你想自己动手时，一键在 OpenCode 或终端接管。
+每件交办在后台有自己的编程代理会话，也有自己的项目经理 agent。OpenCode（或 Claude Code、Codex）每做完一轮，项目经理自己核实交付，替你定技术细节，只把真正需要你的事送上面板。你答满 3 张卡（3 轮），或者想自己动手时，一键在 OpenCode 或终端接管。用聊天里的原话推进工作不算轮次。
 
 ### 案头：可以迟到
 

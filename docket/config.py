@@ -25,7 +25,7 @@
                                 // above this; then its PM closes it, or relays the user's words to OpenCode
   "quiet_wake_minutes": 180,    // a card unanswered this long, with the session idle, wakes its PM once:
                                 // close it, or ask one more specific question instead
-  "quiet_expire_minutes": 1440, // a card unanswered this long is closed by the docket itself, noted as expired;
+  "quiet_expire_minutes": 720, // a card unanswered this long is closed by the docket itself, noted as expired;
                                 // both clocks start when the card goes up on the panel, move on when the chat
                                 // shows you still weighing it, and never before the first sweep with this on
   "judge": {                    // the model that picks a card's background and attributes main-thread messages
@@ -56,7 +56,7 @@ from judge.transcript import canonical_key
 log = logging.getLogger("docket")
 
 PATH = HOME / "config.json"
-DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "watchdog": "observe", "continue_limit": 5, "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 1440, "judge": {}}
+DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "watchdog": "observe", "continue_limit": 5, "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 720, "judge": {}}
 # What the settings window may change; everything else in the file is kept as it is.
 EDITABLE = ("pm_model", "pm_fallback_model", "judge")
 JUDGE_KEYS = ("backend", "model", "endpoint", "keychain_service")
