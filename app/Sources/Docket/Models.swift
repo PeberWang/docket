@@ -18,15 +18,25 @@ struct Delegation: Decodable, Sendable, Identifiable {
     var dispatchedAt: Double?
     var updatedAt: Double?
     var card: Card?
+    /// Where the work stands as the daemon's watchdog sees it (awaiting_dispatch … stalled).
+    var work: String?
 
     enum CodingKeys: String, CodingKey {
         case id, title, engine, state, rounds, handbacks, queued, card
+        case work = "phase"
         case roundLimit = "round_limit"
         case dispatchedAt = "dispatched_at"
         case updatedAt = "updated_at"
     }
 
     var phase: Phase { Phase(rawValue: state) ?? .unknown }
+
+    /// The docket could not get the work moving and says so on the card: never shown as normal progress.
+    var stalled: Bool { work == "stalled" || (card?.open == true && card?.stalled == true) }
+    /// The docket's own failure (not the task's), waiting on a retry.
+    var docketFault: Bool { card?.open == true && card?.docketFault == true && !stalled }
+    /// Handed to OpenCode, not yet seen working.
+    var dispatching: Bool { work == "awaiting_dispatch" || work == "dispatching" }
 
     /// A card with nothing to decide: the panel says so instead of showing an empty question.
     /// A failure card is never "ready to close": the docket's own error is not the work being done.
@@ -51,10 +61,13 @@ struct Card: Decodable, Sendable {
     // Not in the spec: if the daemon echoes the user's answer on an answered card, show it.
     var choices: [String: String]?
     var reply: String?
+    var stalled: Bool?
+    var docketFault: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, open, progress, decisions, conclusion, choices, reply
+        case id, kind, open, progress, decisions, conclusion, choices, reply, stalled
         case decidedForYou = "decided_for_you"
+        case docketFault = "docket_fault"
     }
 
     init(from decoder: Decoder) throws {
@@ -68,6 +81,8 @@ struct Card: Decodable, Sendable {
         conclusion = try c.decodeIfPresent(String.self, forKey: .conclusion)
         choices = try? c.decodeIfPresent([String: String].self, forKey: .choices)
         reply = try? c.decodeIfPresent(String.self, forKey: .reply)
+        stalled = try? c.decodeIfPresent(Bool.self, forKey: .stalled)
+        docketFault = try? c.decodeIfPresent(Bool.self, forKey: .docketFault)
     }
 }
 

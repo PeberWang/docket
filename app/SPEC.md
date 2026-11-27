@@ -20,6 +20,8 @@ Discovery: `~/Library/Application Support/docket/daemon.json`
       "id": "ses_…",                 // OpenCode session id
       "title": "开源监控改本机模式",
       "state": "awaiting",           // running | pending | awaiting | limit | taken_over | closed
+      "phase": "awaiting_user",      // the watchdog's view: awaiting_dispatch | dispatching | running |
+                                     // awaiting_user | verifying | closed | stalled
       "rounds": 1, "round_limit": 3,  // rounds: times the user took part (every answered card, chat mentions)
       "dispatched_at": 1794937892000, "updated_at": 1794939000000,
       "card": {                      // latest card, or null while the first run is going
@@ -37,7 +39,9 @@ Discovery: `~/Library/Application Support/docket/daemon.json`
           }
         ],
         "decided_for_you": ["沿用政策监控的 gog 发信", "…"],
-        "conclusion": null           // set on kind = closed
+        "conclusion": null,          // set on kind = closed
+        "docket_fault": true,        // present on the docket's own failure cards (retry in decisions)
+        "stalled": true              // present when the docket could not get the work moving
       }
     }
   ]
@@ -60,6 +64,15 @@ and "Hand back".
 Only from `taken_over`, otherwise 409. The PM is woken to carry on; rounds are not reset,
 `handbacks` in `GET /api/state` counts how often it happened. The app sets the returned
 state locally at once, then refreshes.
+
+`POST /api/delegations/<id>/note` body `{"text": "…", "source": "panel"}` →
+`202 {"ok": true, "id": "ses_…", "rounds": 2}`. Pass a word on to the PM ("转达一句"): the daemon
+logs it, spends a round, answers the PM's own card if one is up, wakes the PM and carries out its
+action. A closed handoff opens again; taken over or at the limit is 409. `docket note` uses the same.
+
+A card with `stalled` or `docket_fault` must never look like normal progress: the badge says
+"Stuck" / "Docket fault" in orange. `phase` awaiting_dispatch or dispatching shows "Handing it to
+OpenCode…" instead of "Working…".
 
 Errors: JSON `{"error": "…"}` with 4xx/5xx. If the daemon is unreachable, show a quiet
 "Docket service isn’t running" line instead of cards.

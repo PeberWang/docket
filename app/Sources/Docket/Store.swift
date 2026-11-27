@@ -53,6 +53,8 @@ final class Store: ObservableObject {
     @Published private(set) var selections: [Int: [String: String]] = [:]
     /// delegationID → draft reply text
     @Published var drafts: [String: String] = [:]
+    /// delegationID → text of a word being passed on (the card's "pass a word on" field, when it is open)
+    @Published var notes: [String: String] = [:]
     @Published private(set) var busy: Set<String> = []
     @Published private(set) var errors: [String: DocketError] = [:]
     /// What the user sent, kept locally so answered cards can show it.
@@ -251,6 +253,15 @@ final class Store: ObservableObject {
             try await client.close(delegationID: delegation.id, reply: reply)
         } onSuccess: { store in
             store.drafts[delegation.id] = nil
+        }
+    }
+
+    func note(_ delegation: Delegation) {
+        guard let text = notes[delegation.id]?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+        perform(delegation.id) { client in
+            try await client.note(delegationID: delegation.id, text: text)
+        } onSuccess: { store in
+            store.notes[delegation.id] = nil
         }
     }
 

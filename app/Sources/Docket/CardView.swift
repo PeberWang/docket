@@ -6,6 +6,7 @@ struct CardView: View {
 
     @ViewState private var showHandled = false
     @ViewState private var confirmingClose = false
+    @ViewState private var passingOn = false
 
     private var s: Strings { store.s }
     private var card: Card? { delegation.card }
@@ -51,8 +52,8 @@ struct CardView: View {
             }
 
             switch phase {
-            case .running: ActivityLine(text: s(.activityRunning))
-            case .pending: ActivityLine(text: s(.activityPending))
+            case .running: ActivityLine(text: s(delegation.dispatching ? .activityDispatching : .activityRunning))
+            case .pending: ActivityLine(text: s(delegation.dispatching ? .activityDispatching : .activityPending))
             default: EmptyView()
             }
 
@@ -86,12 +87,15 @@ struct CardView: View {
     /// The divider and the actions. Never dimmed: on a taken-over card, handing back is the one thing left to do.
     @ViewBuilder
     private var footer: some View {
-        if phase != .closed {
+        if phase != .closed || canPassOn {
             VStack(alignment: .leading, spacing: 12) {
                 SectionDivider()
                 VStack(alignment: .leading, spacing: 8) {
                     if isOpen && !isLimit {  // at the limit only closing or taking over is left
                         replyField
+                    }
+                    if passingOn && canPassOn {
+                        noteField
                     }
                     if let error = store.errors[delegation.id] {
                         Text(error.message(s))
@@ -113,7 +117,8 @@ struct CardView: View {
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                StateBadge(phase: phase, s: s, readyToClose: delegation.readyToClose)
+                StateBadge(phase: phase, s: s, readyToClose: delegation.readyToClose,
+                           stalled: delegation.stalled, docketFault: delegation.docketFault)
             }
             Text(meta)
                 .font(.system(size: 11).monospacedDigit())
@@ -202,6 +207,57 @@ struct CardView: View {
             )
     }
 
+    /// With no card of the PM's to answer, a word can still be passed on: the daemon wakes the PM with it.
+    /// Never while it is taken over (write in OpenCode) or at the limit.
+    private var canPassOn: Bool {
+        phase != .takenOver && phase != .limit && !isLimit && !(isOpen && card?.docketFault != true)
+    }
+
+    private var noteField: some View {
+        let text = Binding(
+            get: { store.notes[delegation.id] ?? "" },
+            set: { store.notes[delegation.id] = $0 }
+        )
+        let canSend = !(store.notes[delegation.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !busy
+        return HStack(spacing: 6) {
+            TextField(s(.notePlaceholder), text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .onSubmit { store.note(delegation) }
+            Button {
+                store.note(delegation)
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.45))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .help(s(.passWordOn))
+            .accessibilityLabel(s(.passWordOn))
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+    }
+
+    private var passOnButton: some View {
+        Button(s(.passWordOn)) {
+            withAnimation(.easeInOut(duration: 0.15)) { passingOn.toggle() }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11.5))
+        .foregroundStyle(.secondary)
+    }
+
     private var replyField: some View {
         let draft = Binding(
             get: { store.draft(for: delegation.id) },
@@ -246,7 +302,11 @@ struct CardView: View {
     private var actionRow: some View {
         switch phase {
         case .closed:
-            EmptyView()
+            HStack(spacing: 8) {
+                passOnButton
+                Spacer(minLength: 0)
+            }
+            .disabled(busy)
         case .takenOver:
             // Taken over: open the session again, or hand it back so the PM carries on.
             HStack(spacing: 8) {
@@ -260,6 +320,7 @@ struct CardView: View {
             .disabled(busy)
         default:
             HStack(spacing: 8) {
+                if canPassOn { passOnButton }
                 Spacer(minLength: 0)
                 Button(confirmingClose ? s(.confirmClose) : s(.close)) {
                     if confirmingClose {

@@ -217,10 +217,13 @@ struct StateBadge: View {
     let phase: Phase
     let s: Strings
     var readyToClose: Bool = false
+    var stalled: Bool = false
+    var docketFault: Bool = false
 
     var body: some View {
-        let tint = phase == .awaiting ? Color.accentColor : Color.secondary
-        Text(readyToClose ? s(.phaseReadyToClose) : s.phase(phase))
+        let alert = stalled || docketFault
+        let tint = alert ? Color.orange : phase == .awaiting ? Color.accentColor : Color.secondary
+        Text(stalled ? s(.phaseStalled) : docketFault ? s(.phaseDocketFault) : readyToClose ? s(.phaseReadyToClose) : s.phase(phase))
             .lineLimit(1)
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(tint)

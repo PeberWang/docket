@@ -61,6 +61,11 @@ final class DaemonClient {
         _ = try await send("POST", "/api/delegations/\(escaped(delegationID))/close", json: body)
     }
 
+    /// Pass a word on to the handoff's PM: the daemon logs it and wakes the PM itself.
+    func note(delegationID: String, text: String) async throws {
+        _ = try await send("POST", "/api/delegations/\(escaped(delegationID))/note", json: ["text": text, "source": "panel"])
+    }
+
     func takeover(delegationID: String) async throws {
         _ = try await send("POST", "/api/delegations/\(escaped(delegationID))/takeover", json: [:])
     }

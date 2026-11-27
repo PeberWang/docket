@@ -54,7 +54,8 @@ enum StringKey: Sendable {
     case showDocketHelp, hideDocketHelp, statusTooltip
     // States
     case phaseAwaiting, phaseReadyToClose, phasePending, phaseRunning, phaseLimit, phaseTakenOver, phaseClosed, phaseUnknown
-    case activityRunning, activityPending
+    case activityRunning, activityPending, activityDispatching
+    case phaseStalled, phaseDocketFault, passWordOn, notePlaceholder
     // Card
     case round, queued, metaSeparator, justNow, nothingToDecide
     case recommended, handledForYou
@@ -105,6 +106,11 @@ struct Strings: Sendable {
         .phaseUnknown: ("Unknown", "未知"),
         .activityRunning: ("Working…", "执行中…"),
         .activityPending: ("Writing the next brief…", "PM 整理中…"),
+        .activityDispatching: ("Handing it to OpenCode…", "派发中，等 OpenCode 接手…"),
+        .phaseStalled: ("Stuck", "卡住了"),
+        .phaseDocketFault: ("Docket fault", "案头故障"),
+        .passWordOn: ("Pass a word on", "转达一句"),
+        .notePlaceholder: ("For the PM…", "要转达给 PM 的话…"),
 
         .round: ("Round %d of %d", "第 %d 轮 / 共 %d 轮"),
         .queued: ("%d more waiting", "另有 %d 张等候"),
