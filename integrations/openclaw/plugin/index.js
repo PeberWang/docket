@@ -14,13 +14,6 @@ export const ID = "docket";
 const TIMER = Symbol.for("openclaw-docket.refresh");
 const DAY = 24 * 60 * 60 * 1000;
 
-let define = (entry) => entry;
-try {
-  ({ definePluginEntry: define } = await import("openclaw/plugin-sdk/plugin-entry"));
-} catch {
-  // Loaded outside the Gateway (tests) or from a linked folder without the SDK: the plain entry object.
-}
-
 export function settings(raw = {}) {
   return {
     home: raw.home,
@@ -159,9 +152,11 @@ export function register(api) {
   return docket;
 }
 
-export default define({
+// The plain entry object definePluginEntry would return: OpenClaw loads plugins with require(), which
+// refuses a module with top-level await, and a linked folder has no SDK to import from anyway.
+export default {
   id: ID,
   name: "OpenClaw Docket",
   description: "Keeps handed-off coding work on Docket: one writer into coding-agent sessions, chat follow-ups passed on, conclusions delivered back.",
   register,
-});
+};
