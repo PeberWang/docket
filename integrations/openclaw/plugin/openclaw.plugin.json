@@ -1,0 +1,20 @@
+{
+  "id": "docket",
+  "name": "OpenClaw Docket",
+  "description": "Keeps handed-off coding work on Docket: one writer into coding-agent sessions, chat follow-ups passed on, conclusions delivered back.",
+  "version": "0.2.0",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "reload": { "turnHandover": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "home": { "type": "string", "description": "Docket's data directory (default ~/Library/Application Support/docket)" },
+      "refreshMs": { "type": "integer", "minimum": 1000, "description": "How often the plugin reads Docket's view" },
+      "mainSessions": { "type": "array", "items": { "type": "string" }, "description": "Sessions that always get the open-handoff list" },
+      "noteCommand": { "type": "string", "description": "Path of the docket CLI the main agent runs to pass words on" },
+      "enforce": { "type": "boolean", "description": "false: record what would be refused and let it through" }
+    }
+  }
+}

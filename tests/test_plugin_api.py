@@ -84,10 +84,11 @@ class PluginApi(unittest.TestCase):
         self.docket.settings["pm_agent"] = "docket-pm"
         view = self.docket.openclaw_view()
         self.assertEqual(view["version"], 1)
-        self.assertIn("ses_x", view["sessions"])
+        self.assertEqual(view["sessions"]["ses_x"], "ses_x")
+        self.assertEqual(view["pm_agent"], "docket-pm")
         self.assertIn("agent:docket-pm:", view["pm_prefixes"])
         self.assertIn("agent:main:docket-", view["pm_prefixes"])  # handoffs registered before the PM agent
-        self.assertIn("agent:main:docket-x", view["pm_sessions"])
+        self.assertEqual(view["pm_sessions"]["agent:main:docket-x"], "ses_x")
         [item] = view["handoffs"]
         self.assertEqual((item["id"], item["state"], item["needs_you"], item["source"]), ("ses_x", "awaiting", True, "agent:main:main"))
         self.assertIn("Sort by date", item["card"])

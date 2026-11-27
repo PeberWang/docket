@@ -2233,9 +2233,11 @@ class Docket:
         return {
             "version": 1,
             "round_limit": ledger.ROUND_LIMIT,
-            "sessions": sorted({s for r in rows if r["engine"] == "opencode" for s in (r["id"], r["engine_session"]) if s}),
+            # session -> the handoff to name in `docket note`; the watchdog may have moved a handoff to a new session
+            "sessions": {s: r["id"] for r in reversed(rows) if r["engine"] == "opencode" for s in (r["id"], r["engine_session"]) if s},
+            "pm_agent": agent,
             "pm_prefixes": sorted({"agent:main:docket-", "agent:main:desk-", *([f"agent:{agent}:"] if agent != "main" else [])}),
-            "pm_sessions": sorted({r["pm_key"] for r in rows if r["pm_key"]}),
+            "pm_sessions": {r["pm_key"]: r["id"] for r in reversed(rows) if r["pm_key"]},
             "handoffs": handoffs,
             "conclusions": self.undelivered_conclusions(),
         }

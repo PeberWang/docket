@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-docket",
+  "version": "0.2.0",
+  "private": true,
+  "description": "OpenClaw plugin for Docket",
+  "type": "module",
+  "license": "MIT",
+  "scripts": { "test": "node --test test/" },
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "compat": { "pluginApi": ">=2026.11.6" },
+    "install": { "minHostVersion": "2026.11.6" }
+  }
+}
