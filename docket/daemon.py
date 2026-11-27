@@ -195,7 +195,8 @@ class Docket:
         head = pm.record_lines(self.last_exec_line(row["id"]), folded)
         start = ledger.now()
         try:
-            return pm.ask(row["pm_key"], f"{head}\n\n{message}" if head else message, validate, record=record)
+            prompt = "\n\n".join(part for part in (pm.contract(), head, message) if part)
+            return pm.ask(row["pm_key"], prompt, validate, record=record)
         finally:
             ledger.log(self.db(), row["id"], "pm:wake", {"start": start, "end": ledger.now()})
 
@@ -716,7 +717,8 @@ class Docket:
             service = Service()
             times = service.session(turn["session"]).get("time") or {}
             if (times.get("busy") or 0) > (times.get("idle") or 0):  # stuck at work: an idle session is left as it is
-                service._request("POST", f"/api/session/{turn['session']}/abort", {})
+                # OpenCode 2.2 stops a run with /interrupt; /abort does not exist, so stopping never worked before.
+                service._request("POST", f"/api/session/{turn['session']}/interrupt", {})
                 ledger.log(self.db(), turn["delegation_id"], "turn:aborted", {"turn": turn["id"], "session": turn["session"]})
         except Exception as error:
             log.debug("abort %s: %s", turn["session"], error)

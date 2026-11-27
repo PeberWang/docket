@@ -96,7 +96,7 @@ def fake_service(world):
             world.requests.append((method, path))
             sid = path.split("/")[3] if path.startswith("/api/session/") else None
             times = world.sessions.get(sid, {}).get("time", {})
-            if path.endswith("/abort") and (times.get("busy") or 0) > (times.get("idle") or 0):
+            if path.endswith("/interrupt") and (times.get("busy") or 0) > (times.get("idle") or 0):
                 world.end(sid, "interrupted")
 
         def prompt(self, sid, text):
@@ -412,7 +412,7 @@ class Robustness(Watched):
         self.assertIn("Planner.swift", text)  # and what the last turn left
         self.assertNotIn("README.md", text)
         self.assertIn("build the three views", text)
-        self.assertIn(("POST", "/api/session/ses_x/abort"), self.world.requests)
+        self.assertIn(("POST", "/api/session/ses_x/interrupt"), self.world.requests)
         self.tick()
         self.assertEqual(self.row()["phase"], "running")
         # The stopped session's own end is the old session's, not this turn's.
@@ -581,6 +581,16 @@ class ObserveMode(Watched):
     def test_the_default_is_observe(self):
         self.assertEqual(daemon.docket_config.DEFAULTS["watchdog"], "observe")
 
+    def test_every_wake_starts_with_the_pms_contract(self):
+        """Audit 2026-11-27 (4A-1): PMs ran opencode-dispatch themselves; the rules were only in the first wake."""
+        self.relay("first piece")
+        self.world.end("ses_x", "succeeded")
+        self.answers.append(dict(CARD, progress="first piece done"))
+        self.docket.on_run_end("ses_x", "succeeded", "done", session="ses_x")
+        self.assertEqual(len(self.pm_messages), 2)
+        for message in self.pm_messages:
+            self.assertTrue(message.startswith("Docket's contract for this wake"), message[:80])
+
     def test_an_instruction_that_never_shows_up_is_noted_once_and_never_sent_again(self):
         self.on_resume = ["die"]
         self.relay("build the three views")
@@ -606,7 +616,7 @@ class ObserveMode(Watched):
             self.tick()
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.observed(), [("stop it and send it again in a new session", "quiet")])
-        self.assertNotIn(("POST", "/api/session/ses_x/abort"), self.world.requests)
+        self.assertNotIn(("POST", "/api/session/ses_x/interrupt"), self.world.requests)
         self.assertEqual(self.row()["phase"], "running")
 
     def test_an_interrupted_run_gets_the_pms_card_as_before_the_watchdog(self):

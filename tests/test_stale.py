@@ -165,7 +165,7 @@ class Stale(unittest.TestCase):
         self.assertIn("answered your last card", wake)
         self.assertIn("期刊列表按什么排序？", wake)
         self.assertIn("b) 按发表时间", wake)
-        self.assertIn("“期刊那个就按发表时间排吧，影响因子不用管”", wake)
+        self.assertIn('<user-words source="main chat">\n期刊那个就按发表时间排吧，影响因子不用管\n</user-words>', wake)
         self.assertIn("→ 按发表时间", wake)
         self.assertEqual(self.state(), "closed")
         conclusion = json.loads(self.db.execute("select body from cards where kind = 'closed'").fetchone()[0])["conclusion"]
