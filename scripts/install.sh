@@ -3,8 +3,10 @@
 #   - builds Docket.app and copies it to ~/Applications
 #   - writes a default config if there is none
 #   - registers two launchd agents: the service (always on) and the app (at login)
-#   - installs the desk-dispatch skill into OpenClaw, if OpenClaw is present
+#   - wires OpenClaw, if it is present (scripts/openclaw_setup.py): the plugin, the docket-pm agent,
+#     the desk-dispatch skill. A skill or PM file changed by hand is backed up, never lost.
 # Re-running it upgrades in place. Data in ~/Library/Application Support/docket is kept.
+# DOCKET_SKIP_OPENCLAW=1 leaves OpenClaw alone; scripts/openclaw_setup.py --dry-run shows what it would change.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -90,12 +92,11 @@ for job in "$LABEL" "$LABEL.app"; do
   launchctl bootstrap "$DOMAIN" "$AGENTS/$job.plist"
 done
 
-if [ -d "$HOME/.openclaw/workspace/skills" ]; then
-  rm -rf "$HOME/.openclaw/workspace/skills/desk-dispatch"
-  cp -R "$REPO/integrations/openclaw/desk-dispatch" "$HOME/.openclaw/workspace/skills/desk-dispatch"
-  chmod +x "$HOME/.openclaw/workspace/skills/desk-dispatch/scripts/desk-dispatch"
-  ln -sf "$REPO/scripts/docket" "$HOME/.openclaw/workspace/skills/desk-dispatch/scripts/docket"
-  say "Installed the OpenClaw skill desk-dispatch"
+if [ "${DOCKET_SKIP_OPENCLAW:-0}" != "1" ] && command -v openclaw >/dev/null; then
+  say "Wiring OpenClaw: plugin, PM agent, skill"
+  if ! /usr/bin/python3 -I "$REPO/scripts/openclaw_setup.py"; then
+    echo "OpenClaw was not wired completely; see above, fix it and run: /usr/bin/python3 -I $REPO/scripts/openclaw_setup.py"
+  fi
 fi
 
 cat <<EOF
