@@ -668,6 +668,8 @@ class ObserveMode(Watched):
         self.assertEqual(json.loads(card["body"])["progress"], "the running log is in")
         turn = self.db.execute("select outcome from turns where delegation_id = 'ses_late'").fetchone()
         self.assertEqual(turn["outcome"], "succeeded")
+        phases = [e[0][6:] for e in self.db.execute("select kind from events where delegation_id = 'ses_late' and kind like 'phase:%' order by id")]
+        self.assertEqual(phases, ["dispatching", "verifying", "awaiting_user"])
 
     def test_a_stray_pm_answer_waits_on_a_card_instead_of_running(self):
         self.relay("first piece")

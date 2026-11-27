@@ -1535,6 +1535,7 @@ class Docket:
                     return
                 # Observing: an unfinished run gets the PM's card, and the user decides what follows.
                 self.observe(row["id"], turn, "send it again", event)
+            ledger.set_phase(db, row["id"], "verifying")  # also when the turn was never seen running
         self.expire_permissions(session_id)
         ledger.set_state(self.db(), session_id, "pending")
         self.submit(session_id, self.write_card, session_id, event, reply)
