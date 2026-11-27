@@ -49,6 +49,11 @@ class OpenClawSetup(unittest.TestCase):
     def test_the_patch_adds_the_plugin_to_the_allowlist_and_the_pm_agent(self):
         patch = self.setup().patch(json.loads(self.config.read_text()))
         self.assertEqual(patch["plugins"]["allow"], ["browser", "docket"])
+        self.assertEqual(patch["plugins"]["load"], {"paths": [str(setup_module.PLUGIN)]})  # arrays replace: written whole
+        kept = self.setup().patch({"plugins": {"load": {"paths": ["/other/plugin"]}}})
+        self.assertEqual(kept["plugins"]["load"]["paths"], ["/other/plugin", str(setup_module.PLUGIN)])
+        linked = self.setup().patch({"plugins": {"load": {"paths": [str(setup_module.PLUGIN)]}}})
+        self.assertNotIn("load", linked["plugins"])
         self.assertTrue(patch["plugins"]["entries"]["docket"]["hooks"]["allowConversationAccess"])
         agent = patch["agents"]["entries"]["docket-pm"]
         self.assertEqual(agent["workspace"], str(self.data / "pm-workspace"))
@@ -101,7 +106,7 @@ class OpenClawSetup(unittest.TestCase):
         again.add_agent(config)
         again.docket_config()
         self.assertEqual(len(self.cli.ran("openclaw", "agents", "add")), 1)
-        self.assertEqual(len(self.cli.ran("openclaw", "plugins", "install")), 1)
+        self.assertEqual(self.cli.ran("openclaw", "plugins", "install"), [])  # the Gateway applies load.paths live
         self.assertEqual(len(list((self.data / "pm-workspace").glob("AGENTS.md.bak-*"))), 1)  # the edit is kept aside
 
     def test_a_skill_changed_by_hand_is_backed_up_and_one_installed_by_docket_is_not(self):

@@ -3,8 +3,9 @@
 
     openclaw_setup.py [--dry-run] [--no-plugin] [--no-pm-agent] [--no-skill]
 
-1. the plugin: `openclaw plugins install --link`, enabled, conversation access for its prompt hook,
-   and `docket` added to plugins.allow when that allowlist is set;
+1. the plugin: its folder in plugins.load.paths (what `plugins install --link` writes, but that command
+   needs the Gateway stopped, while the Gateway applies load.paths live), enabled, conversation access
+   for its prompt hook, and `docket` added to plugins.allow when that allowlist is set;
 2. the PM agent docket-pm: its workspace in Docket's data directory, `openclaw agents add`, its
    tool policy, no first-run BOOTSTRAP.md; then "pm_agent": "docket-pm" in Docket's config.json;
 3. the desk-dispatch skill, backing up an installed copy that was changed by hand.
@@ -88,6 +89,10 @@ class Setup:
         out: dict = {}
         if self.plugin:
             plugins: dict = {"entries": {PLUGIN_ID: {"enabled": True, "hooks": {"allowConversationAccess": True}}}}
+            paths = ((config.get("plugins") or {}).get("load") or {}).get("paths")
+            paths = paths if isinstance(paths, list) else []
+            if str(PLUGIN) not in paths:
+                plugins["load"] = {"paths": [*paths, str(PLUGIN)]}
             allow = (config.get("plugins") or {}).get("allow")
             if isinstance(allow, list) and PLUGIN_ID not in allow:
                 plugins["allow"] = [*allow, PLUGIN_ID]
@@ -104,6 +109,7 @@ class Setup:
         return self.data / "pm-workspace"
 
     def install_plugin(self, config: dict):
+        """The link itself goes into the config patch (plugins.load.paths); this only checks where from."""
         paths = ((config.get("plugins") or {}).get("load") or {}).get("paths") or []
         if str(PLUGIN) in paths:
             self.out(f"plugin already linked from {PLUGIN}")
@@ -111,7 +117,7 @@ class Setup:
         if "/.worktrees/" in str(PLUGIN) and not self.dry_run:
             # A link keeps pointing here: a worktree that is removed later would take the plugin with it.
             raise RuntimeError(f"not linking the plugin from a worktree ({PLUGIN}); run the installer from the main checkout")
-        self.act(f"link the plugin from {PLUGIN}", ["openclaw", "plugins", "install", "--link", str(PLUGIN), "--force"])
+        self.say(f"link the plugin from {PLUGIN} (plugins.load.paths, in the patch below)")
 
     def pm_workspace(self):
         """Docket's own files: replaced on upgrade, but a copy someone edited is backed up first."""
