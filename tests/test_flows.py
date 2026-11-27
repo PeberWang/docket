@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -42,6 +43,7 @@ class Flows(unittest.TestCase):
         ledger.connect.__defaults__ = (daemon.ledger.DB,)
         self.docket = daemon.Docket()
         self.docket.submit = lambda did, job, *args: job(*args)
+        self.docket.later = lambda seconds, fn, *args: fn(*args)  # a judged chat message is taken up at once
         self.db = self.docket.db()
         ledger.add_delegation(self.db, id="ses_x", title="t", directory=None, source_key="k", dispatch_seq=1, dispatched_at=0, brief="", context=[])
 
@@ -61,21 +63,78 @@ class Flows(unittest.TestCase):
     def rounds(self):
         return self.docket.delegation("ses_x")["rounds"]
 
-    def test_mention_relay_needs_confirmation(self):
-        self.answers.append({"action": "relay", "message": "do more"})
-        self.mention("a chat message")
-        card = ledger.open_card(self.db, "ses_x")
-        self.assertEqual(json.loads(card["body"])["pending_relay"], "do more")
-        self.assertEqual(self.sent, [])
-        self.docket.decide(card["id"], {"relay": "yes"}, "")
-        self.assertEqual(self.sent, ["do more"])
+    def test_a_chat_mention_the_pm_takes_up_goes_out_and_costs_one_round(self):
+        """The person's words in the chat steer the work directly (architecture, section 3, step 5)."""
+        self.answers.append({"action": "relay", "message": "Use the blue theme."})
+        self.mention("用蓝色主题")
+        self.assertEqual(self.sent, ["Use the blue theme."])
         self.assertEqual(self.rounds(), 1)
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
 
-    def test_mention_relay_declined_sends_nothing(self):
-        self.answers.append({"action": "relay", "message": "do more"})
-        self.docket.act("ses_x", "m", "a chat message")
-        self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {"relay": "no"}, "")
+    def from_main_chat(self, seq: int = 7):
+        """docket note --from agent:main:main reads that chat: its latest user message is m{seq} of session CHAT."""
+        return mock.patch.multiple(
+            daemon,
+            openclaw_connect=lambda: mock.Mock(),
+            transcript_messages=lambda conn, session_id, since=0: [mock.Mock(seq=seq, role="user")],
+        ), mock.patch.object(daemon.transcript, "session_id_for", lambda conn, key: "CHAT")
+
+    def test_one_chat_message_passed_on_twice_costs_one_round(self):
+        """The judge's reading and the main agent's docket note of the same words: one round, either order."""
+        message = mock.Mock(seq=7, text="用蓝色主题", time=10, role="user")
+        answer = {"choice": "ses_x", "belongs": 0.95, "new_work": 0.1}
+        with mock.patch.object(daemon.relevance, "attribute", lambda *a: (answer, None)), \
+                mock.patch.object(daemon.relevance, "should_move", lambda *a: True):
+            self.answers.append({"action": "relay", "message": "Use the blue theme."})
+            self.docket.attribute(message, [], [self.docket.delegation("ses_x")], "CHAT")
+        self.assertEqual(self.rounds(), 1)
+        patches, session = self.from_main_chat()
+        with patches, session:
+            self.answers.append({"action": "hold", "note": "already sent"})
+            self.docket.note("ses_x", "用户说用蓝色主题", "agent:main:main")
+        self.assertEqual((self.rounds(), self.sent), (1, ["Use the blue theme."]))
+        # The other way round: the note comes first, and the judge's later reading of m8 is not acted on.
+        patches, session = self.from_main_chat(seq=8)
+        with patches, session:
+            self.answers.append({"action": "relay", "message": "Make the header blue too."})
+            self.docket.note("ses_x", "标题也改蓝", "agent:main:main")
+        self.assertEqual(self.rounds(), 2)
+        message = mock.Mock(seq=8, text="标题也改蓝", time=10, role="user")
+        with mock.patch.object(daemon.relevance, "attribute", lambda *a: (answer, None)), \
+                mock.patch.object(daemon.relevance, "should_move", lambda *a: True):
+            self.docket.attribute(message, [], [self.docket.delegation("ses_x")], "CHAT")
+        self.assertEqual(self.rounds(), 2)
+        self.assertEqual(self.sent, ["Use the blue theme.", "Make the header blue too."])
+        self.assertTrue(self.db.execute("select 1 from events where kind = 'mention:claimed'").fetchone())
+
+    def test_a_chat_mention_the_pm_holds_costs_nothing(self):
+        card = self.awaiting_card()
+        self.answers.append({"action": "hold", "note": "background for the next piece"})
+        self.mention("顺便说一下，下周可能要改名")
+        self.assertEqual((self.sent, self.rounds()), ([], 0))
+        self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (card,)).fetchone()[0])  # never swallowed
+        self.assertEqual(self.state(), "awaiting")
+
+    def test_a_risky_instruction_waits_for_a_yes_and_a_no_puts_the_waiting_card_back(self):
+        """Audit 2026-11-27, J3: a relay that would push or deploy goes on a card unless the person asked for it."""
+        first = self.awaiting_card()
+        self.answers.append({"action": "relay", "message": "Fix the failing test, then git push origin main."})
+        self.docket.decide(first, {}, "修一下那个测试")
         self.assertEqual(self.sent, [])
+        card = ledger.open_card(self.db, "ses_x")
+        body = json.loads(card["body"])
+        self.assertEqual((body["pending_relay"], body["risk"], body["round_spent"]), ("Fix the failing test, then git push origin main.", "push", True))
+        self.assertEqual(self.rounds(), 1)
+        self.answers.append({"action": "card", "card": dict(CARD, progress="the test is fixed, nothing pushed")})
+        self.docket.decide(card["id"], {"relay": "no"}, "")  # declined: nothing runs, so the PM says what next
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.rounds(), 1)
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "the test is fixed, nothing pushed")
+
+    def test_a_risky_instruction_the_person_asked_for_goes_out(self):
+        self.answers.append({"action": "relay", "message": "Commit and git push origin main."})
+        self.docket.decide(self.awaiting_card(), {}, "改完直接推送到 GitHub")
+        self.assertEqual(self.sent, ["Commit and git push origin main."])
 
     def test_pm_sessions_new_prefix_and_old_rows_kept(self):
         self.assertEqual(ledger.pm_key("ses_ab_c"), "agent:main:docket-ab-c")
@@ -130,17 +189,125 @@ class Flows(unittest.TestCase):
         self.assertEqual(self.rounds(), 1)
         self.assertEqual([r["kind"] for r in self.db.execute("select kind from events where delegation_id = 'ses_x' and kind in ('round', 'relayed') order by id")], ["round", "relayed"])
 
-    def test_a_chat_mention_is_one_round(self):
-        self.answers.append({"action": "relay", "message": "from chat"})
-        self.mention("also do Y")
+    # ---------- after a run: the PM verifies and moves the work on itself ----------
+
+    def checked_pm(self):
+        """A fake PM that answers from self.answers but, like the real one, only with what passes validation.
+        Jobs then run through the daemon's own run_job, so a refused answer becomes its failure card."""
+        prompts = []
+        self.docket.lock = lambda delegation_id: contextlib.nullcontext()  # jobs nest when run in line
+        self.docket.submit = lambda did, job, *args: self.docket.run_job(did, job, args)
+
+        def ask(key, message, validate, record=None):
+            prompts.append(message)
+            answer = self.answers.pop(0)
+            errors = validate(answer)
+            if errors:
+                raise pm.PMFailed([{"attempt": 1, "model": None, "raw": json.dumps(answer), "errors": errors}])
+            return pm.normalize(answer)
+
+        pm.ask = ask
+        return prompts
+
+    def test_after_a_run_the_pm_hands_the_next_piece_on_itself(self):
+        self.checked_pm()
+        self.answers.append({"action": "relay", "message": "Now add the export button."})
+        self.docket.on_run_end("ses_x", "succeeded", "the list view is done")
+        self.assertEqual(self.sent, ["Now add the export button."])
+        self.assertEqual((self.rounds(), self.state()), (0, "running"))
+        relayed = json.loads(self.db.execute("select detail from events where kind = 'relayed'").fetchone()[0])
+        self.assertEqual(relayed["via"], "continue")
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))  # nothing for the person
+
+    def test_past_the_continue_limit_the_pm_must_show_where_things_stand(self):
+        prompts = self.checked_pm()
+        self.docket.settings["continue_limit"] = 2
+        for piece in ("one", "two"):
+            self.answers.append({"action": "relay", "message": f"Do piece {piece}."})
+            self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(len(self.sent), 2)
+        self.answers.append({"action": "relay", "message": "Do piece three."})
+        self.docket.on_run_end("ses_x", "succeeded", "done")  # refused: a failure card, never a third relay
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("as often as Docket allows", prompts[-1])
+        self.assertTrue(json.loads(ledger.open_card(self.db, "ses_x")["body"])["docket_fault"])
+        # The person's answer resets the count: the PM may continue on its own again.
+        card = ledger.add_card(self.db, "ses_x", "report", CARD)
+        self.db.execute("update cards set resolved_at = 1 where id != ?", (card,))
+        ledger.set_state(self.db, "ses_x", "awaiting")
+        self.answers.append({"action": "relay", "message": "Do piece three."})
+        self.docket.decide(card, {}, "go on")
+        self.assertEqual(self.docket.continues("ses_x"), 0)
+        self.answers.append({"action": "relay", "message": "Do piece four."})
+        self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(self.sent[-1], "Do piece four.")
+
+    def test_a_risky_continuation_waits_for_a_yes_that_costs_a_round(self):
+        self.checked_pm()
+        self.answers.append({"action": "relay", "message": "Tests pass; run npm publish."})
+        self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(self.sent, [])
+        card = ledger.open_card(self.db, "ses_x")
+        body = json.loads(card["body"])
+        self.assertEqual((body["risk"], body["round_spent"]), ("publish", False))
+        self.docket.decide(card["id"], {"relay": "yes"}, "")
+        self.assertEqual(self.sent, ["Tests pass; run npm publish."])
         self.assertEqual(self.rounds(), 1)
-        self.docket.decide(ledger.open_card(self.db, "ses_x")["id"], {"relay": "yes"}, "")
-        self.assertEqual(self.sent, ["from chat"])
-        self.assertEqual(self.rounds(), 1)  # confirming it is the same act of taking part
-        # A mention that answers an open card spends that card with it, still one round.
+
+    def test_run_ends_that_come_while_the_pm_reading_waits_make_one_card(self):
+        """Audit 2026-11-27, 4A-2: three run ends in a row used to give three near-identical cards."""
+        jobs, prompts = [], []
+        self.docket.submit = lambda did, job, *args: jobs.append((job, args))
+        self.docket.on_run_end("ses_x", "succeeded", "first result")
+        self.docket.on_run_end("ses_x", "succeeded", "second result")
+        self.assertEqual(len(jobs), 1)
+
+        def ask(key, message, validate, record=None):
+            prompts.append(message)
+            return dict(CARD)
+
+        pm.ask = ask
+        job, args = jobs.pop()
+        job(*args)
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("second result", prompts[0])
+        self.assertNotIn("first result", prompts[0])
+        self.assertEqual(self.db.execute("select count(*) from cards").fetchone()[0], 1)
+        self.docket.on_run_end("ses_x", "succeeded", "third result")  # after the reading started: read again
+        self.assertEqual(len(jobs), 1)
+
+    def test_a_takeover_while_the_pm_reads_the_run_stays_a_takeover(self):
+        """Audit 2026-11-27, S4: the PM's card used to put a taken-over handoff back to waiting."""
+        def ask(key, message, validate, record=None):
+            self.docket.takeover("ses_x")  # the person opens it in OpenCode meanwhile
+            return dict(CARD, progress="done")
+
+        pm.ask = ask
+        self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(self.state(), "taken_over")
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
+        self.assertTrue(self.db.execute("select 1 from events where kind = 'pm:dropped'").fetchone())
+        self.assertFalse(ledger.set_state(self.db, "ses_x", "awaiting"))  # nothing but a hand back moves it
+
+    def test_a_brief_on_its_own_is_still_a_card(self):
+        self.checked_pm()
+        self.answers.append(dict(CARD, kind="question", progress="Two ways to sort.", decisions=[
+            {"id": "d1", "question": "Sort by?", "options": [{"id": "a", "label": "Date", "recommended": True}, {"id": "b", "label": "Name"}]}]))
+        self.docket.on_run_end("ses_x", "succeeded", "done")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "Two ways to sort.")
+        self.assertEqual(self.state(), "awaiting")
+
+    def test_a_chat_mention_that_settles_the_card_spends_it_with_the_round(self):
+        card = self.awaiting_card()
+        self.answers.append({"action": "relay", "message": "Sort by date.", "settles_card": True})
+        self.mention("按时间排")
+        self.assertEqual(self.rounds(), 1)
+        resolution = json.loads(self.db.execute("select resolution from cards where id = ?", (card,)).fetchone()[0])
+        self.assertEqual((resolution["reply"], resolution["via"]), ("按时间排", "chat"))
+        # A mention that does not settle the card leaves it up, still one round for taking part.
         self.awaiting_card()
-        self.answers.append({"action": "card", "card": dict(CARD, kind="question")})
-        self.mention("about that card")
+        self.answers.append({"action": "card", "card": dict(CARD, kind="question", progress="which date?")})
+        self.mention("about the sorting")
         self.assertEqual(self.rounds(), 2)
 
     def test_replay_spends_nothing(self):
@@ -182,6 +349,52 @@ class Flows(unittest.TestCase):
         conclusion = json.loads(self.db.execute("select body from cards where kind = 'closed'").fetchone()[0])["conclusion"]
         self.assertIn("half done", conclusion)
         self.assertIn("tests", conclusion)
+
+    def test_closing_on_the_panel_is_final_at_once_and_the_pm_writes_the_conclusion_after(self):
+        daemon.MEMORY_DIR = Path(tempfile.mkdtemp())
+        self.awaiting_card()
+        jobs = []
+        self.docket.submit = lambda did, job, *args: jobs.append((job, args))
+        self.docket.close("ses_x", "不做了")
+        self.assertEqual(self.state(), "closed")  # before the PM has said a word
+        self.assertIsNone(ledger.open_card(self.db, "ses_x"))
+        with self.assertRaises(ValueError):
+            self.docket.close("ses_x", "")  # a second click
+        self.answers.append({"action": "close", "conclusion": "Dropped at the user's word; the list view is done."})
+        for job, args in jobs:
+            job(*args)
+        closed = self.db.execute("select body from cards where kind = 'closed'").fetchall()
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(json.loads(closed[0][0])["conclusion"], "Dropped at the user's word; the list view is done.")
+        memory = next(daemon.MEMORY_DIR.glob("*.md")).read_text(encoding="utf-8")
+        self.assertEqual(memory.count("Dropped at the user's word"), 1)
+        self.assertNotIn("Done.", memory)  # the placeholder never reached the memory log
+
+    def test_a_pm_that_fails_after_the_close_leaves_it_closed_with_a_plain_conclusion(self):
+        daemon.MEMORY_DIR = Path(tempfile.mkdtemp())
+        self.docket.submit = lambda did, job, *args: self.docket.run_job(did, job, args)
+
+        def ask(key, message, validate, record=None):
+            raise pm.PMFailed([{"attempt": 1, "model": None, "raw": "", "errors": ["no JSON"]}])
+
+        pm.ask = ask
+        self.docket.close("ses_x", "")
+        self.assertEqual(self.state(), "closed")
+        self.assertEqual(self.db.execute("select count(*) from cards where kind = 'failure'").fetchone()[0], 0)
+        self.assertIn(self.docket.t("closed_fallback"), next(daemon.MEMORY_DIR.glob("*.md")).read_text(encoding="utf-8"))
+        # With a card of the PM's before, its last word on where things stood is the conclusion.
+        ledger.add_delegation(self.db, id="ses_y", title="t", directory=None, source_key="k", dispatch_seq=2, dispatched_at=0, brief="", context=[])
+        self.docket.show_card("ses_y", "report", dict(CARD, progress="The list view works; export is left."))
+        self.docket.close("ses_y", "")
+        conclusion = json.loads(self.db.execute("select body from cards where delegation_id = 'ses_y' and kind = 'closed'").fetchone()[0])["conclusion"]
+        self.assertEqual(conclusion, "The list view works; export is left.")
+
+    def test_closing_twice_leaves_one_conclusion(self):
+        daemon.MEMORY_DIR = Path(tempfile.mkdtemp())
+        self.assertIsNotNone(self.docket.finish("ses_x", "done"))
+        self.assertIsNone(self.docket.finish("ses_x", "done again"))  # a PM job that finishes late
+        self.assertEqual(self.db.execute("select count(*) from cards where kind = 'closed'").fetchone()[0], 1)
+        self.assertEqual(next(daemon.MEMORY_DIR.glob("*.md")).read_text(encoding="utf-8").count("done"), 1)
 
     # ---------- the docket's own failures never close a handoff ----------
 
@@ -415,9 +628,12 @@ class Flows(unittest.TestCase):
         self.docket.sweep_orphans()
         self.assertIsNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
         self.docket.jobs["ses_x"] = 0
+        # Pending with no PM job and nothing running: once the orphan is gone, the PM says what comes next.
+        self.answers.append({"action": "card", "card": dict(CARD, progress="here is where it stands")})
         self.docket.sweep_orphans()
         self.assertIsNotNone(self.db.execute("select resolved_at from cards where id = ?", (old,)).fetchone()[0])
-        self.assertEqual(self.state(), "running")  # nothing left to show
+        self.assertEqual(self.state(), "awaiting")
+        self.assertEqual(json.loads(ledger.open_card(self.db, "ses_x")["body"])["progress"], "here is where it stands")
 
     # ---------- an awaiting card whose session has ended ----------
 

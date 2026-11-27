@@ -109,6 +109,7 @@ class Stale(unittest.TestCase):
         self.docket.locale, self.docket.t = "zh", i18n.Strings("zh")
         self.docket.stale_since = 0  # the fixtures' cards are older than this test's docket
         self.docket.submit = lambda did, job, *args: job(*args)
+        self.docket.later = lambda seconds, fn, *args: fn(*args)
         self.db = self.docket.db()
         ledger.add_delegation(self.db, id="ses_s", title="期刊排序", directory=None, source_key=MAIN, dispatch_seq=1, dispatched_at=0, brief="改期刊列表的排序", context=[])
 

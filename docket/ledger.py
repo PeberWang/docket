@@ -29,6 +29,8 @@ ROUND_LIMIT = 3
 STATES = ("running", "pending", "awaiting", "limit", "taken_over", "closed")
 # Once at the limit a handoff stays there: only an ending moves it on.
 LIMIT_EXITS = ("taken_over", "closed")
+# Left only on purpose (set_state(..., force=True)): a hand back, a note, the person closing.
+STICKY = ("taken_over", "closed")
 
 # Alongside the state, each handoff has a phase: where its work stands, as the watchdog sees it.
 #   awaiting_dispatch   the docket is about to hand an instruction to OpenCode
@@ -166,15 +168,23 @@ def pm_key(delegation_id: str) -> str:
     return f"agent:main:docket-{delegation_id.removeprefix('ses_').replace('_', '-')}"
 
 
-def set_state(conn, delegation_id: str, state: str, **fields) -> None:
+def set_state(conn, delegation_id: str, state: str, force: bool = False, **fields) -> bool:
+    """Move a handoff to `state`; False when the move was refused.
+
+    Taken over and closed are left only on purpose (a hand back, a note, the person closing),
+    with force=True: a PM job or a sweep that finishes late can never undo them."""
     assert state in STATES, state
     current = conn.execute("select state from delegations where id = ?", (delegation_id,)).fetchone()
+    if current and current[0] in STICKY and state not in STICKY and not force:
+        log(conn, delegation_id, "state:refused", {"from": current[0], "to": state})
+        return False
     if current and current[0] == "limit" and state not in LIMIT_EXITS:
         state = "limit"
     columns = ["state = ?", "updated_at = ?"] + [f"{name} = ?" for name in fields]
     conn.execute(f"update delegations set {', '.join(columns)} where id = ?", (state, now(), *fields.values(), delegation_id))
     log(conn, delegation_id, f"state:{state}", fields or None)
     follow_phase(conn, delegation_id, state)
+    return True
 
 
 def follow_phase(conn, delegation_id: str, state: str) -> None:
@@ -313,6 +323,11 @@ def amend_resolution(conn, card_id: int, extra: dict) -> None:
     conn.execute("update cards set resolution = ? where id = ?", (json.dumps({**current, **extra}, ensure_ascii=False), card_id))
 
 
+def set_body(conn, card_id: int, body: dict) -> None:
+    """Rewrite a card's text in place (the conclusion the PM writes after the person closed)."""
+    conn.execute("update cards set body = ? where id = ?", (json.dumps(body, ensure_ascii=False), card_id))
+
+
 def add_conclusion(conn, delegation_id: str, body: dict) -> int:
     """The closed card: a record of the ending, resolved at birth so it never counts as waiting."""
     card_id = add_card(conn, delegation_id, "closed", body)
@@ -379,7 +394,7 @@ def active(conn) -> list:
     return conn.execute("select * from delegations where state not in ('closed') order by dispatched_at").fetchall()
 
 
-HIDDEN = ("pending_relay", "pending_permission", "pm_retry", "wrap_up", "round_spent", "quiet_since", "quiet_woken", "orphan", "next")
+HIDDEN = ("pending_relay", "pending_permission", "pm_retry", "wrap_up", "round_spent", "quiet_since", "quiet_woken", "orphan", "next", "risk", "drafting")
 
 
 def _card_text(body: dict) -> dict:

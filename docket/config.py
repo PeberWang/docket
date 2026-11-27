@@ -15,6 +15,8 @@
   "pm_fallback_model": null,    // third try when the PM's reply failed validation twice; null = pm_model again
   "fallback_model": null,       // OpenCode model ("provider/model") to retry once with after a usage limit; null = no retry
   "reconcile_max_age_hours": 6, // on restart a pending handoff idle longer than this is closed as overdue, not woken
+  "continue_limit": 5,          // after a run the PM may hand OpenCode the next piece itself this many times
+                                // in a row; then it must show you where things stand (your answer resets it)
   "watchdog": "observe",        // "act": an instruction that never shows up in its session, goes quiet or ends
                                 // unfinished is sent again once, then stalled on a card; "observe": the watchdog
                                 // only logs what it would do (watchdog:observed) and an unfinished run gets a PM card
@@ -54,7 +56,7 @@ from judge.transcript import canonical_key
 log = logging.getLogger("docket")
 
 PATH = HOME / "config.json"
-DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "watchdog": "observe", "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 1440, "judge": {}}
+DEFAULTS = {"watch": ["*"], "context_threshold": 0.5, "move_threshold": 0.85, "attribute": True, "prefix": "", "locale": "auto", "engine": "opencode", "pm_model": None, "pm_fallback_model": None, "fallback_model": None, "reconcile_max_age_hours": 6, "watchdog": "observe", "continue_limit": 5, "stale_enabled": True, "stale_threshold": 0.9, "quiet_wake_minutes": 180, "quiet_expire_minutes": 1440, "judge": {}}
 # What the settings window may change; everything else in the file is kept as it is.
 EDITABLE = ("pm_model", "pm_fallback_model", "judge")
 JUDGE_KEYS = ("backend", "model", "endpoint", "keychain_service")

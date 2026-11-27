@@ -113,6 +113,32 @@ class Prompts(unittest.TestCase):
         for must in ("exactly one JSON object", "opencode-dispatch", "sessions_send", "no sleep", "<untrusted>", "<user-words>"):
             self.assertIn(must, contract)
 
+    def test_each_wake_accepts_only_the_answers_that_fit_it(self):
+        relay = {"action": "relay", "message": "Add the export button."}
+        hold = {"action": "hold", "note": "a name change may come next week"}
+        card = {"action": "card", "card": dict(CARD)}
+        # After a run: relay, card or close, and the bare brief of older PMs; a relay only within the limit.
+        self.assertEqual(pm.validate_verify(True)(relay), [])
+        self.assertEqual(pm.validate_verify(True)(dict(CARD)), [])
+        self.assertTrue(pm.validate_verify(False)(relay))
+        self.assertEqual(pm.validate_verify(False)(card), [])
+        self.assertTrue(pm.validate_verify(True)(hold))
+        self.assertIn("as often as Docket allows", pm.later_wake("succeeded", "done", 0, 0))
+        self.assertIn("2 more time(s)", pm.later_wake("succeeded", "done", 0, 2))
+        # What the person said: a hold too, never the format's own placeholder.
+        self.assertEqual(pm.validate_input(hold), [])
+        self.assertTrue(pm.validate_input({"action": "hold", "note": "one sentence for the record: why"}))
+        self.assertTrue(pm.validate_input(dict(relay, settles_card="yes")))
+        self.assertIn('"hold"', pm.mention_wake("用蓝色主题", 1))
+        self.assertIn("settles_card", pm.mention_wake("用蓝色主题", 1, dict(CARD)))
+        self.assertNotIn("settles_card", pm.mention_wake("用蓝色主题", 1))
+        # Nothing runs and nothing is asked: a card or a close, never an instruction.
+        self.assertTrue(pm.validate_next_step(relay))
+        self.assertEqual(pm.validate_next_step(card), [])
+        # The person closed it: only a conclusion.
+        self.assertTrue(pm.validate_close(card))
+        self.assertEqual(pm.validate_close({"action": "close", "conclusion": "Dropped; the list view is done."}), [])
+
 
 class Snapshot(unittest.TestCase):
     def test_a_cards_text_never_stands_in_for_its_id_kind_or_open_flag(self):

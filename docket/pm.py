@@ -54,10 +54,10 @@ Rules:
 3. A card says at most two sentences, read at a glance on a phone. progress is one sentence: where things stand and the outcome, not the process. next is one optional sentence: what you need from the user, or what happens next. Code checks the length limits and sends back any card over them.
 4. To verify a delivery you may read files and run unit tests. Do not change project code, commit, push, release, run anything that sends or deploys (email, chat, push notifications, scheduled jobs, servers), or edit cron.
 5. Hard rule: a handoff has a budget of {ROUND_LIMIT} rounds of the user's attention, and Docket enforces it in code.
-   a. Every time the user takes part costs one round: answering any card (a permission request too), writing about the handoff in the chat, even asking "can this be done?". What you check, run and decide on your own costs nothing.
+   a. Every time the user takes part costs one round: answering any card (a permission request too), a message passed on to you, a chat message about the handoff that you take up (a hold costs nothing), even asking "can this be done?". What you check, run and decide on your own costs nothing.
    b. Before writing a card, ask yourself whether you can decide it. Decide what you can; when you must ask, ask everything at once. Never split one question across rounds.
    c. When the budget is spent Docket refuses every further card. You must wrap up: close with what got done and list what is left as a handoff note the user can continue from in OpenCode. Do not try to ask again.
-6. Working with the coding agent: write each instruction you relay as a complete brief, with the acceptance criteria stated up front (what must pass, what to report back), so it can finish without coming back to the user. Prefer one complete instruction to several partial ones.
+6. Working with the coding agent: write each instruction you relay as a complete brief, with the acceptance criteria stated up front (what must pass, what to report back), so it can finish without coming back to the user. Prefer one complete instruction to several partial ones. After a run, when what the user already decided settles the next piece, relay it yourself instead of asking; Docket limits how many times in a row, and holds back for the user's yes any instruction that would push, publish, deploy or reach outside the project.
 7. Write every user-facing string in {_language()}, in plain words. Someone who has not read the code or the project's docs must understand each question; name things by what they are, not by internal terms (a "gate table" is a file's name, not an explanation).
    Never write a file path, directory name, file name, function, variable or package name, command, error code, URL, line number or code in a user-facing string: say what the thing is or does instead, for example {TEXT[LOCALE]['plain_example']}. Use a technical term only when nothing plainer works, and explain it in everyday words the first time, like {TEXT[LOCALE]['term_example']}. Code checks this too and sends back any card that breaks it. (The relay message to OpenCode is not user-facing: be as exact as you need there.)
 8. Use no Markdown in card text: no asterisks for emphasis, no backticks, no headings. The panel shows plain text, so Markdown would appear literally.
@@ -99,15 +99,51 @@ def card_format() -> str:
                 "options": [{{"id": "a", "label": "at most {l['label']} characters", "recommended": true}},
                             {{"id": "b", "label": "…", "recommended": false}}]}}],
  "decided_for_you": ["one decision you made for the user per line, at most 6, each at most {l['decided']} characters"]}}
-kind: report when OpenCode delivered; question when OpenCode is waiting for an answer or the user must choose a direction; failure when the run failed or was interrupted."""
+kind: report when OpenCode delivered; question when OpenCode is waiting for an answer or the user must choose a direction; failure when the run failed or was interrupted.
+When an option would push, publish, deploy, delete outside the project or touch another machine, its label names that act (e.g. "Push to GitHub", not "Yes"): Docket sends such an instruction only when the user's own words asked for it."""
 
 
-def action_format() -> str:
-    return f"""Action JSON, one of:
+def action_format(hold: bool = False) -> str:
+    text = f"""Action JSON, one of:
 {{"action": "relay", "message": "the follow-up instruction for OpenCode: the user's decision turned into a clear, actionable request"}}
 {{"action": "card", "card": <Brief JSON>}}        // when you can handle it without OpenCode, or need to ask the user once more
 {{"action": "close", "conclusion": "one sentence: what got done and what is left, in plain words, no paths (at most {_limits()['conclusion']} characters)",
  "remaining": ["optional: one unfinished item per line, at most 6, each at most {_limits()['decided']} characters"]}}"""
+    if hold:
+        text += """
+{"action": "hold", "note": "one sentence for the record: why nothing goes out now"}   // keep it as background for the next instruction: nothing is sent, the user is not asked"""
+    return text + "\n\n" + card_format()
+
+
+def input_tail(card_up: bool) -> str:
+    """How to answer a wake on what the user said (a note, the chat)."""
+    lines = [
+        "Decide what it means for this handoff, in one action:",
+        "- relay if it is a correction, a new requirement or a go-ahead for OpenCode. If OpenCode is still at work, it takes the instruction in at its next step, so say plainly how it changes the work in progress;",
+        "- card if it needs an answer from you or a decision the user has not made;",
+        "- close if they are saying the work is done;",
+        "- hold if it is only background for later: nothing is sent and the user is not asked.",
+    ]
+    if card_up:
+        lines.append('If their words answer the card that is up on the panel, add "settles_card": true and Docket takes it down.')
+    return "\n".join(lines)
+
+
+def validate_input(action) -> list[str]:
+    """A wake on what the user said: relay, card, close, or hold to keep it for later."""
+    if isinstance(action, dict) and action.get("action") == "hold":
+        note = action.get("note")
+        if note is not None and not isinstance(note, str):
+            return ["hold.note must be a string"]
+        errors: list = []
+        _placeholder(note, "note", errors)
+        return errors
+    errors = validate_action(action)
+    if not errors and action.get("settles_card") not in (None, True, False):
+        errors.append("settles_card must be true or false")
+    if not errors and action.get("delivery") not in (None, "queue", "steer"):
+        errors.append('delivery must be "queue" or "steer"')
+    return errors
 
 
 def budget_line(rounds: int) -> str:
@@ -123,7 +159,7 @@ class PMError(RuntimeError):
 
 # ---------- prompts ----------
 
-def first_wake(handoff: dict, context: list[dict], event: str, opencode_reply: str) -> str:
+def first_wake(handoff: dict, context: list[dict], event: str, opencode_reply: str, continues_left: int = 5) -> str:
     lines = [rules(), "", f"## Handoff: {handoff['title']}", f"OpenCode session: {handoff['id']}"]
     if handoff.get("directory"):
         lines.append(f"Project directory: {handoff['directory']}")
@@ -132,17 +168,35 @@ def first_wake(handoff: dict, context: list[dict], event: str, opencode_reply: s
     if context:
         lines += ["", "### What the user said about it in the main chat, and its background (picked by the judge, in time order)"]
         lines += [_fenced("chat", "main chat", "\n".join(f"- [{m['time']}] {'User' if m['role'] == 'user' else 'Assistant'}: {m['text']}" for m in context))]
-    lines += ["", event_block(event, opencode_reply, handoff.get("rounds", 0)), "", card_format()]
+    lines += ["", event_block(event, opencode_reply, handoff.get("rounds", 0)), "", verify_tail(continues_left)]
     return "\n".join(lines)
+
+
+def verify_tail(continues_left: int) -> str:
+    """After a run: the PM verifies, then moves the work on itself or asks only what needs the user."""
+    if continues_left > 0:
+        steps = [
+            "Decide the next step in one action:",
+            f"- relay the next piece to OpenCode when the brief already settles it, so the work moves on without the user (you may do this {continues_left} more time(s) before the user must see where things stand);",
+            "- card if something needs the user's call, or the user should see where things stand;",
+            "- close if the work is done.",
+        ]
+    else:
+        steps = [
+            "You have moved the work on by yourself as often as Docket allows in a row. Now show the user where things stand:",
+            "- card: what got done, and what the user should decide next (going on is one of the options);",
+            "- or close if the work is done.",
+        ]
+    return "\n".join(steps + ["", action_format()])
 
 
 def event_block(event: str, opencode_reply: str, rounds: int) -> str:
     head = {
-        "succeeded": "OpenCode finished this round. Verify the delivery and write a brief.",
-        "failed": "OpenCode's run failed. Find out why and write a brief (kind=failure).",
-        "interrupted": "OpenCode's run was interrupted. Check where things stand and write a brief.",
-        "question": "OpenCode is waiting for an answer. Answer it yourself if you can; put what the user must decide in decisions and write a brief (kind=question).",
-    }.get(event, "OpenCode has news. Write a brief.")
+        "succeeded": "OpenCode finished this round. Verify the delivery.",
+        "failed": "OpenCode's run failed. Find out why.",
+        "interrupted": "OpenCode's run was interrupted. Check where things stand.",
+        "question": "OpenCode is waiting for an answer. Answer it yourself with a relay if the brief settles it; put only what the user must decide on a card.",
+    }.get(event, "OpenCode has news.")
     reply = opencode_reply.strip()
     if len(reply) > OPENCODE_CHARS:
         reply = reply[:OPENCODE_CHARS] + "\n… (truncated; read the handoff doc in the project if you need more)"
@@ -154,8 +208,22 @@ def language_line() -> str:
     return f"Write every user-facing string in {_language()}, even if earlier turns used another language."
 
 
-def later_wake(event: str, opencode_reply: str, rounds: int) -> str:
-    return "\n".join([event_block(event, opencode_reply, rounds), "", language_line(), "", card_format()])
+def later_wake(event: str, opencode_reply: str, rounds: int, continues_left: int = 5) -> str:
+    return "\n".join([event_block(event, opencode_reply, rounds), "", language_line(), "", verify_tail(continues_left)])
+
+
+def validate_verify(allow_relay: bool):
+    """A run end's answer: relay, card or close (a brief on its own, the older answer shape, is a card).
+    Past the continue limit only a card or a close is accepted."""
+    def validate(value) -> list[str]:
+        if isinstance(value, dict) and "action" not in value:
+            return validate_card(value)
+        errors = validate_action(value)  # a hold is refused here: after a run something must follow
+        if not errors and value["action"] == "relay" and not allow_relay:
+            errors.append("you have moved the work on by yourself as often as Docket allows in a row: write a card showing where things stand, or close")
+        return errors
+
+    return validate
 
 
 def decision_wake(card: dict, choices: dict, reply: str, rounds: int) -> str:
@@ -180,18 +248,21 @@ def decision_wake(card: dict, choices: dict, reply: str, rounds: int) -> str:
     return "\n".join(lines)
 
 
-def mention_wake(text: str, rounds: int) -> str:
-    return "\n".join(
-        [
-            "The user mentioned this handoff in the main chat (the judge is confident):",
-            user_words("main chat", text),
-            "If it is a new requirement or a correction, relay; if they are asking for progress or need an answer from you, card; if they are saying it is done, close.",
-            budget_line(rounds),
-            language_line(),
-            "",
-            action_format(),
-        ]
-    )
+def mention_wake(text: str, rounds: int, card: dict | None = None) -> str:
+    """The judge found a chat message about this handoff. Taking it up costs the user a round; holding it does not."""
+    lines = ["The user wrote this in the main chat, and the judge is confident it is about this handoff:", user_words("main chat", text)]
+    if card:
+        lines += ["", "The card on the panel now:", *card_lines(card)]
+    lines += [
+        "",
+        input_tail(card_up=bool(card)),
+        "Taking it up (relay, card or close) counts as the user taking part: one round. A hold costs nothing.",
+        budget_line(rounds),
+        language_line(),
+        "",
+        action_format(hold=True),
+    ]
+    return "\n".join(lines)
 
 
 def note_wake(text: str, source: str, rounds: int, card: dict | None = None) -> str:
@@ -200,13 +271,34 @@ def note_wake(text: str, source: str, rounds: int, card: dict | None = None) -> 
     if card:
         lines += ["It answers the card you had on the panel:", *card_lines(card)]
     lines += [
-        "Docket carries out the action you reply with, the same as for any wake. If it is a new requirement, a correction or a go-ahead, relay; if it asks for progress or needs your answer, card; if it says the work is done, close.",
+        "",
+        "Docket carries out the action you reply with, the same as for any wake.",
+        input_tail(card_up=False),
+        budget_line(rounds),
+        language_line(),
+        "",
+        action_format(hold=True),
+    ]
+    return "\n".join(lines)
+
+
+def next_step_wake(rounds: int) -> str:
+    """Nothing runs and nothing is asked: the PM says what comes next, on a card, at no cost to the user."""
+    return "\n".join([
+        "Nothing is running for this handoff and nothing is waiting on the panel (the user may have declined your last proposal).",
+        "Write one card that says where things stand and what could come next, or close if the work is done. Do not relay.",
         budget_line(rounds),
         language_line(),
         "",
         action_format(),
-    ]
-    return "\n".join(lines)
+    ])
+
+
+def validate_next_step(action) -> list[str]:
+    errors = validate_action(action)
+    if not errors and action["action"] == "relay":
+        errors.append("nothing may be sent now: reply with a card or close")
+    return errors
 
 
 def record_lines(last: str | None, folded: list[dict]) -> str:
@@ -564,7 +656,7 @@ RESERVED_IDS = ("retry", "permission", "relay", "none", "other")
 CARD_KEYS = ("kind", "progress", "next", "decisions", "decided_for_you")
 DECISION_KEYS = ("id", "question", "options")
 OPTION_KEYS = ("id", "label", "recommended", "why")
-ACTION_KEYS = ("action", "message", "card", "conclusion", "remaining", "basis", "checklist", "delivery")
+ACTION_KEYS = ("action", "message", "card", "conclusion", "remaining", "basis", "checklist", "delivery", "note", "settles_card")
 
 
 def shape_card(card: dict) -> dict:
@@ -609,6 +701,12 @@ def validate_action(action) -> list[str]:
     if kind == "card":
         return validate_card(action.get("card"))
     return ["action must be relay, card or close"]
+
+
+def validate_close(action) -> list[str]:
+    if not isinstance(action, dict) or action.get("action") != "close":
+        return ['the handoff is closed: reply with {"action": "close", ...} only']
+    return validate_action(action)
 
 
 def validate_wrap_up(action) -> list[str]:
@@ -722,6 +820,7 @@ PLACEHOLDERS = {
     "question": ("one line, what the user decides",),
     "message": ("the follow-up instruction for opencode",),
     "conclusion": ("one sentence: what got done",),
+    "note": ("one sentence for the record",),
 }
 
 

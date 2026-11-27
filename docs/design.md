@@ -57,6 +57,7 @@ Each handoff gets its own OpenClaw session (`agent:main:docket-<id>`). It is the
 - The service watches the coding agent: the OpenCode event stream, or the exit of a Claude Code or Codex process.
 - When a run ends, it wakes the PM once with `openclaw agent --session-key … --json` (no `--deliver`, so nothing reaches the chat).
 - Your decision goes to the PM, which answers with an action: `relay` (the service sends the follow-up and counts a round), `card` (ask you again), or `close`.
+- After a run the PM verifies it and answers the same way: it may relay the next piece itself when your decisions already settle it (no round, at most `continue_limit` times in a row), and any instruction that would push, publish, deploy or reach outside the project waits on a card for your yes.
 
 Code keeps watch; the model only judges.
 
@@ -65,7 +66,7 @@ Code keeps watch; the model only judges.
 A personal chat interleaves topics, so the context of a handoff is scattered across the conversation. Picking it out is a conversation disentanglement problem. The judge is [Jev](https://typesafe.ai), a model that answers typed questions with calibrated probabilities instead of generating text:
 
 1. **Background.** At dispatch, one yes/no question per earlier message: is this part of the task's context? Messages above the threshold are kept verbatim. They carry your own words; a task brief is the agent's paraphrase.
-2. **Attribution.** Later, when you mention a handoff in the chat, one choice among the open handoffs plus a yes/no "is it about any of them" and a "is this new work" check. A message moves only when all three agree with high probability. A follow-up triggered this way is shown as a card for you to confirm; it is never sent on its own.
+2. **Attribution.** Later, when you mention a handoff in the chat, one choice among the open handoffs plus a yes/no "is it about any of them" and a "is this new work" check. A message moves only when all three agree with high probability. The message then goes to the handoff's PM, which decides what it means: steer the work with it (one round), keep it as background (`hold`, no round) or ask you. It answers the card on the panel only when the PM says your words settle it.
 
 Evaluated on 17 real handoffs from one person's chat, against reference labels written by a strong model and revised once:
 
