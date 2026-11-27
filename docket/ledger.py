@@ -430,10 +430,11 @@ def snapshot(conn, closed_hours: int = 24, taken_over_days: int = 7) -> list[dic
                 "dispatched_at": row["dispatched_at"],
                 "updated_at": row["updated_at"],
                 "card": {
+                    # The body first: nothing a card's text holds may stand in for its id, kind or open flag.
+                    **_card_text(json.loads(last["body"])),
                     "id": last["id"],
                     "kind": last["kind"],
                     "open": last["resolved_at"] is None,
-                    **_card_text(json.loads(last["body"])),
                     **({"choices": answer.get("choices") or {}, "reply": answer.get("reply") or ""} if answer and last["kind"] != "closed" else {}),
                 }
                 if last

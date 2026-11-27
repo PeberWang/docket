@@ -922,7 +922,7 @@ class Docket:
             for reply in reversed(group["replies"]):
                 value, errors = pm.pick(reply.text, pm.validate_action)
                 if not errors:
-                    action = value
+                    action = pm.normalize(value)  # the same shape a docket wake's answer gets: no control fields
                     break
             seqs = [m.seq for m in ([group["user"]] if group["user"] else []) + group["replies"]]
             last_time = max(m.time for m in ([group["user"]] if group["user"] else []) + group["replies"])

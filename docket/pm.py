@@ -473,10 +473,12 @@ def validate_card(card) -> list[str]:
     if card.get("kind") not in ("report", "question", "failure"):
         errors.append("kind must be report, question or failure")
     _short(card.get("progress"), l["progress"], "progress", errors)
+    _placeholder(card.get("progress"), "progress", errors)
     _plain(card.get("progress"), "progress", errors, one_sentence=True)
     following = card.get("next")
     if following is not None and following != "":
         _short(following, l["next"], "next", errors)
+        _placeholder(following, "next", errors)
         _plain(following, "next", errors, one_sentence=True)
         if isinstance(following, str) and isinstance(card.get("progress"), str) and len(card["progress"]) + len(following) > l["body"]:
             errors.append(f"progress and next together are {len(card['progress']) + len(following)} characters, over the limit of {l['body']}: cut one of them.")
@@ -484,13 +486,19 @@ def validate_card(card) -> list[str]:
     if not isinstance(decisions, list) or len(decisions) > 2:
         errors.append("at most 2 decisions")
         decisions = []
+    decision_ids = [d.get("id") for d in decisions if isinstance(d, dict)]
+    if len(set(decision_ids)) != len(decision_ids):
+        errors.append("each decision needs its own id")
     for i, decision in enumerate(decisions):
         where = f"decisions[{i}]"
         if not isinstance(decision, dict):
             errors.append(f"{where} must be an object")
             continue
         _short(decision.get("id"), 10, f"{where}.id", errors)
+        if decision.get("id") in RESERVED_IDS:
+            errors.append(f"{where}.id may not be {decision['id']!r}: Docket uses it for its own cards")
         _short(decision.get("question"), l["question"], f"{where}.question", errors)
+        _placeholder(decision.get("question"), "question", errors)
         _plain(decision.get("question"), f"{where}.question", errors)
         options = decision.get("options") or []
         if not isinstance(options, list) or not 2 <= len(options) <= 3:
@@ -498,18 +506,50 @@ def validate_card(card) -> list[str]:
             continue
         if sum(1 for o in options if isinstance(o, dict) and o.get("recommended") is True) != 1:
             errors.append(f"{where} needs exactly one recommended=true")
+        option_ids = [o.get("id") for o in options if isinstance(o, dict)]
+        if len(set(option_ids)) != len(option_ids):
+            # Two options under one id would carry the user's click to the wrong one.
+            errors.append(f"{where}: each option needs its own id")
         for j, option in enumerate(options):
             if not isinstance(option, dict):
                 errors.append(f"{where}.options[{j}] must be an object")
                 continue
             _short(option.get("id"), 10, f"{where}.options[{j}].id", errors)
+            if option.get("id") in RESERVED_IDS:
+                errors.append(f"{where}.options[{j}].id may not be {option['id']!r}")
             _short(option.get("label"), l["label"], f"{where}.options[{j}].label", errors)
             _plain(option.get("label"), f"{where}.options[{j}].label", errors)
-            if len(option.get("why") or "") > l["why"]:
+            # The panel decodes these strictly: a wrong type would hide every handoff, not just this card.
+            if "recommended" in option and not isinstance(option["recommended"], bool):
+                errors.append(f"{where}.options[{j}].recommended must be true or false")
+            if option.get("why") is not None and not isinstance(option["why"], str):
+                errors.append(f"{where}.options[{j}].why must be a string")
+            elif len(option.get("why") or "") > l["why"]:
                 errors.append(f"{where}.options[{j}].why is longer than {l['why']} characters")
             _plain(option.get("why"), f"{where}.options[{j}].why", errors)
     _lines(card.get("decided_for_you"), "decided_for_you", errors)
     return errors
+
+
+# Ids Docket's own cards answer to (a retry, a permission, a relay to confirm), and the judge's sentinels.
+RESERVED_IDS = ("retry", "permission", "relay", "none", "other")
+# What a PM may put on a card or an action; anything else is dropped before it is stored, so a reply can
+# never carry the docket's own control fields (pm_retry, pending_permission, round_spent, …) onto a card.
+CARD_KEYS = ("kind", "progress", "next", "decisions", "decided_for_you")
+DECISION_KEYS = ("id", "question", "options")
+OPTION_KEYS = ("id", "label", "recommended", "why")
+ACTION_KEYS = ("action", "message", "card", "conclusion", "remaining", "basis", "checklist", "delivery")
+
+
+def shape_card(card: dict) -> dict:
+    out = {k: card[k] for k in CARD_KEYS if k in card}
+    out["decisions"] = [
+        {**{k: d[k] for k in DECISION_KEYS if k in d},
+         "options": [{k: o[k] for k in OPTION_KEYS if k in o} for o in d.get("options") or [] if isinstance(o, dict)]}
+        for d in out.get("decisions") or [] if isinstance(d, dict)
+    ]
+    out.setdefault("decided_for_you", [])
+    return out
 
 
 def _lines(items, field, errors):
@@ -528,10 +568,15 @@ def validate_action(action) -> list[str]:
         return ["the action must be a JSON object"]
     kind = action.get("action")
     if kind == "relay":
-        return [] if isinstance(action.get("message"), str) and action["message"].strip() else ["relay needs a non-empty message"]
-    if kind == "close":
+        if not (isinstance(action.get("message"), str) and action["message"].strip()):
+            return ["relay needs a non-empty message"]
         errors: list[str] = []
+        _placeholder(action["message"], "message", errors)
+        return errors
+    if kind == "close":
+        errors = []
         _short(action.get("conclusion"), _limits()["conclusion"], "conclusion", errors)
+        _placeholder(action.get("conclusion"), "conclusion", errors)
         _plain(action.get("conclusion"), "conclusion", errors, one_sentence=True)
         _lines(action.get("remaining"), "remaining", errors)
         return errors
@@ -560,17 +605,21 @@ class PMFailed(PMError):
 
 
 def pick(text: str, validate):
-    """The first JSON object in the reply that passes; otherwise the first one's errors."""
+    """The PM's one decision in its reply; otherwise the first object's errors.
+
+    Every JSON object in the reply is checked. Several that pass and differ mean the reply also
+    holds one it quoted (from OpenCode's output, the chat or the format itself): that is asked
+    again, never guessed, because carrying out the quoted one would be carrying out someone else's.
+    """
     objects = json_objects(text)
     if not objects:
         return None, ["no JSON object found in the reply"]
-    first_errors = None
-    for value in objects:
-        errors = validate(value)
-        if not errors:
-            return value, []
-        first_errors = first_errors or errors
-    return None, first_errors
+    passing = [value for value in objects if not validate(value)]
+    if len(passing) > 1:
+        return None, [f"the reply holds {len(passing)} different JSON objects that each pass Docket's checks: reply with exactly one, your own decision, and quote no other"]
+    if passing:
+        return passing[0], []
+    return None, validate(objects[0])
 
 
 def ask(session_key: str, message: str, validate, record=None):
@@ -627,13 +676,34 @@ def _plain_deep(value):
 
 
 def normalize(value: dict) -> dict:
-    card = value.get("card") if value.get("action") == "card" else (value if "progress" in value else None)
-    if card is not None:
-        card.setdefault("decisions", [])
-        card.setdefault("decided_for_you", [])
-    for key in ("card", "message", "conclusion", "basis"):
+    """A validated reply as Docket keeps it: only the known fields, user-facing text plain, and the
+    instruction for the coding agent exactly as the PM wrote it (code, paths and Markdown included)."""
+    if "action" not in value:  # a brief on its own (write_card)
+        return _plain_deep(shape_card(value))
+    value = {k: value[k] for k in ACTION_KEYS if k in value}
+    if isinstance(value.get("card"), dict):
+        value["card"] = _plain_deep(shape_card(value["card"]))
+    for key in ("conclusion", "basis", "remaining"):
         if key in value:
             value[key] = _plain_deep(value[key])
-    if "progress" in value:
-        value = _plain_deep(value)
     return value
+
+
+# The format's own placeholder text: a reply that only restates the format is not a decision.
+PLACEHOLDERS = {
+    "progress": ("one sentence, where things stand",),
+    "next": ("optional, one sentence",),
+    "question": ("one line, what the user decides",),
+    "message": ("the follow-up instruction for opencode",),
+    "conclusion": ("one sentence: what got done",),
+}
+
+
+def _placeholder(value, field: str, errors: list) -> None:
+    if not isinstance(value, str):
+        return
+    text = value.strip().lower()
+    if not text:
+        return  # an empty string is already reported as one
+    if text in ("…", "...") or any(text.startswith(p) for p in PLACEHOLDERS.get(field, ())):
+        errors.append(f"{field} is the format's placeholder, not your text: write the real {field}")
