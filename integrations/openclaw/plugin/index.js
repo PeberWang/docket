@@ -72,7 +72,9 @@ export function createDocket(api, { client, now = Date.now } = {}) {
           idempotencyKey: `docket:conclusion:${item.card}`,
           ttlMs: DAY,
         });
-        if (result && result.ok === false) throw new Error(result.reason || "not queued");
+        // { enqueued, id }: a second enqueue with the same idempotency key is not enqueued again but keeps
+        // the id of the pending one, which is still a delivery. No id: OpenClaw dropped it.
+        if (!result || !(result.enqueued || result.id)) throw new Error("not queued");
         done.push(item.card);
       } catch (error) {
         log.warn?.(`docket: conclusion of ${item.handoff} not queued: ${error.message || error}`);
@@ -145,6 +147,7 @@ export function register(api) {
     name: "docket",
     description: "Docket handoffs: list, status <id>, note <id> <words>",
     acceptsArgs: true,
+    requireAuth: true,
     handler: docket.command,
   });
   // One refresh loop per Gateway process: a reload replaces the previous one instead of adding another.

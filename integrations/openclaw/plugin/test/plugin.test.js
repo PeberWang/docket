@@ -60,7 +60,7 @@ beforeEach(() => {
   fresh();
 });
 
-function fakeApi({ enqueue = async () => ({ ok: true }), config = {} } = {}) {
+function fakeApi({ enqueue = async (item) => ({ enqueued: true, id: "inj_1", sessionKey: item.sessionKey }), config = {} } = {}) {
   const hooks = {};
   const injected = [];
   const api = {
@@ -145,6 +145,17 @@ test("conclusions are queued into their chat once and acknowledged", async () =>
   assert.deepEqual(calls.find((c) => c.url === "/api/openclaw/delivered").body, { cards: [7] });
   await docket.refresh();
   assert.equal(injected.length, 1); // acknowledged: the service no longer lists it
+});
+
+test("a conclusion already pending in OpenClaw is a delivery; one it dropped is not", async () => {
+  const pending = fakeApi({ enqueue: async (item) => ({ enqueued: false, id: "inj_1", sessionKey: item.sessionKey }) });
+  await createDocket(pending.api).refresh();
+  assert.ok(calls.some((c) => c.url === "/api/openclaw/delivered"));
+  calls.length = 0;
+  fresh();
+  const dropped = fakeApi({ enqueue: async (item) => ({ enqueued: false, id: "", sessionKey: item.sessionKey }) });
+  await createDocket(dropped.api).refresh();
+  assert.equal(calls.some((c) => c.url === "/api/openclaw/delivered"), false);
 });
 
 test("a conclusion OpenClaw would not queue is not acknowledged", async () => {
