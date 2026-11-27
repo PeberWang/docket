@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from docket import config as docket_config  # noqa: E402
-from docket import dispatches, engines, i18n, ledger, pm, registry, risk, wording  # noqa: E402
+from docket import dispatches, engines, i18n, ledger, permissions, pm, registry, risk, wording  # noqa: E402
 from docket.opencode import ACTIVITY as ACTIVITY_EVENTS  # noqa: E402
 from docket.opencode import Service  # noqa: E402
 from docket.opencode import new_id as opencode_id  # noqa: E402
@@ -1765,10 +1765,12 @@ class Docket:
         last = ledger.last_turn(self.db(), session_id)
         outside = last["message"] if last and last["via"] == "foreign" else None  # see foreign()
         stopped = event == "interrupted"  # a person stopped it: a card, never another instruction (audit W8)
+        # What permission-notify allowed on the PM's behalf during the run (tier pm): the PM reviews it.
+        delegated = self.delegated_since(session_id, last["started_at"]) if last else []
         if not self.pm_has_acted(session_id):
-            message = pm.first_wake(row, json.loads(row["context"] or "[]"), event, reply, left, outside, stopped)
+            message = pm.first_wake(row, json.loads(row["context"] or "[]"), event, reply, left, outside, stopped, delegated)
         else:
-            message = pm.later_wake(event, reply, row["rounds"], left, outside, stopped)
+            message = pm.later_wake(event, reply, row["rounds"], left, outside, stopped, delegated)
         action = self.ask_pm(row, message, pm.validate_verify(left > 0 and not stopped, pm.STOPPED if stopped else None))
         if "action" not in action:  # a brief on its own, the older answer shape: a card
             action = {"action": "card", "card": action}
@@ -2310,6 +2312,64 @@ class Docket:
         self.finish(row["id"], self.t("superseded_by", title=title), extra={"superseded_by": by})
         return row["id"]
 
+    # ---------- opencode-permission-notify ----------
+
+    PERMISSION_POLL = 10  # s; permission-notify counts 60 s without a heartbeat as offline
+
+    def watch_permissions(self):
+        while True:
+            try:
+                self.permission_pass()
+            except Exception:
+                log.exception("permission pass failed")
+            time.sleep(self.PERMISSION_POLL)
+
+    def permission_pass(self):
+        """One pass: the heartbeat, the decisions made in handoff sessions, and the runs waiting on the popup."""
+        if not permissions.heartbeat():
+            return
+        db = self.db()
+        stored = db.execute("select value from kv where key = 'permission_offset'").fetchone()
+        entries, offset = permissions.read_ledger(int(stored[0]) if stored else None)
+        db.execute("insert or replace into kv values ('permission_offset', ?)", (str(offset),))
+        for entry in entries:
+            self.on_permission(entry)
+        for batch in permissions.waiting():
+            row = self.delegation_for_session(batch["session"])
+            if not row or row["state"] in ("closed", "taken_over"):
+                continue
+            # Waiting for the person in the popup is not being stuck: it counts as activity for the watchdog.
+            self.activity_at = getattr(self, "activity_at", {})
+            self.activity_at.pop(batch["session"], None)
+            self.on_activity(batch["session"])
+            if ledger.claim(db, f"permission_waiting:{batch.get('batch')}"):
+                ledger.log(db, row["id"], "permission:waiting", {"batch": batch.get("batch"), "class": str(batch.get("class") or ""),
+                                                                 "what": [str(w)[:160] for w in (batch.get("what") or [])[:3]]})
+
+    def on_permission(self, entry: dict):
+        """One decision from permission-notify's ledger. In a handoff's session, what was delegated to
+        the PM (tier pm), asked of the person (human) or refused is recorded on the handoff; what is
+        silent by the person's own settings is not, it is the noise those settings chose to drop."""
+        session = entry.get("session")
+        tier = entry.get("tier")
+        if not session or tier == "silent":
+            return
+        row = self.delegation_for_session(session)
+        if not row:
+            return
+        kind = {"pm": "permission:pm", "human": "permission:person", "deny": "permission:denied"}.get(tier)
+        if kind is None:
+            return
+        if tier == "human" and entry.get("effect") == "deny":
+            kind = "permission:denied"
+        ledger.log(self.db(), row["id"], kind, permissions.summary(entry))
+
+    def delegated_since(self, delegation_id: str, since: int) -> list[dict]:
+        """What permission-notify let through on the PM's behalf since `since`: for the PM to review."""
+        rows = self.db().execute("select detail from events where delegation_id = ? and kind = 'permission:pm' and at >= ? order by id",
+                                 (delegation_id, since)).fetchall()
+        return [json.loads(r[0] or "{}") for r in rows]
+
     # ---------- main-thread mentions ----------
 
     def watch_mentions(self):
@@ -2593,7 +2653,11 @@ class Docket:
         # Approve what the machine can vouch for (anything in the project, reads anywhere) and
         # log it; leave writes outside the project and deletes alive for the popup and the card.
         resources = " ".join(str(r) for r in request.get("resources") or [])
-        tier, reason = self.permission_tier(session_id, row, request) if self.unattended(row) else ("ask", "not unattended")
+        if permissions.installed():
+            # The person's own classes in permission-notify decide; Docket never approves over them.
+            tier, reason = "ask", "permission-notify decides"
+        else:
+            tier, reason = self.permission_tier(session_id, row, request) if self.unattended(row) else ("ask", "not unattended")
         entry = {"action": request.get("action"), "resources": resources[:200], "reason": reason}
         if tier == "auto":
             try:
@@ -2918,6 +2982,7 @@ def main():
     threading.Thread(target=docket.watch_mentions, name="mentions", daemon=True).start()
     threading.Thread(target=docket.watch_runs, name="runs", daemon=True).start()
     threading.Thread(target=docket.sweep, name="sweep", daemon=True).start()
+    threading.Thread(target=docket.watch_permissions, name="permissions", daemon=True).start()
     serve(docket)
 
 

@@ -18,7 +18,7 @@ from unittest import mock
 os.environ["DOCKET_HOME"] = tempfile.mkdtemp(prefix="docket-unit-")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from docket import daemon, dispatches, engines, ledger, pm  # noqa: E402
+from docket import daemon, dispatches, engines, ledger, permissions, pm  # noqa: E402
 
 REAL_ASK = pm.ask  # setUp swaps in a fake PM; the PM-failure tests need the real retry loop
 CARD = {"kind": "report", "progress": "p", "decisions": [], "decided_for_you": []}
@@ -49,6 +49,10 @@ class Flows(unittest.TestCase):
         self.docket.later = lambda seconds, fn, *args: fn(*args)  # a judged chat message is taken up at once
         self.db = self.docket.db()
         ledger.add_delegation(self.db, id="ses_x", title="t", directory=None, source_key="k", dispatch_seq=1, dispatched_at=0, brief="", context=[])
+        # These tests are about Docket's own answers: as on a machine without opencode-permission-notify.
+        heartbeat = permissions.HEARTBEAT
+        permissions.HEARTBEAT = Path(tempfile.mkdtemp()) / "absent" / "pm-online"
+        self.addCleanup(setattr, permissions, "HEARTBEAT", heartbeat)
 
     def awaiting_card(self):
         card_id = ledger.add_card(self.db, "ses_x", "report", CARD)

@@ -159,8 +159,24 @@ class PMError(RuntimeError):
 
 # ---------- prompts ----------
 
+def delegated_block(delegated: list[dict] | None) -> str | None:
+    """Permission requests the person delegated to the PM, allowed during the run: the PM's to review."""
+    if not delegated:
+        return None
+    lines = [f"While OpenCode worked, the person's permission settings let these requests through on your behalf "
+             f"({len(delegated)}; the person delegated these kinds to you instead of being asked):"]
+    for item in delegated[:12]:
+        what = "; ".join(item.get("what") or []) or item.get("tool") or "?"
+        lines.append(f"- class {item.get('class')} {item.get('class_name') or ''}: {what}".rstrip())
+    if len(delegated) > 12:
+        lines.append(f"- and {len(delegated) - 12} more")
+    lines.append("Check them against the brief while you verify. If one should not have happened (outside the task, or harmful), "
+                 "say so plainly on a card; do not relay as if nothing happened.")
+    return untrusted("permission-notify", "\n".join(lines))
+
+
 def first_wake(handoff: dict, context: list[dict], event: str, opencode_reply: str, continues_left: int = 5,
-               outside: str | None = None, stopped: bool = False) -> str:
+               outside: str | None = None, stopped: bool = False, delegated: list[dict] | None = None) -> str:
     lines = [rules(), "", f"## Handoff: {handoff['title']}", f"OpenCode session: {handoff['id']}"]
     if handoff.get("directory"):
         lines.append(f"Project directory: {handoff['directory']}")
@@ -169,7 +185,10 @@ def first_wake(handoff: dict, context: list[dict], event: str, opencode_reply: s
     if context:
         lines += ["", "### What the user said about it in the main chat, and its background (picked by the judge, in time order)"]
         lines += [_fenced("chat", "main chat", "\n".join(f"- [{m['time']}] {'User' if m['role'] == 'user' else 'Assistant'}: {m['text']}" for m in context))]
-    lines += ["", event_block(event, opencode_reply, handoff.get("rounds", 0), outside), "", verify_tail(continues_left, stopped)]
+    lines += ["", event_block(event, opencode_reply, handoff.get("rounds", 0), outside)]
+    block = delegated_block(delegated)
+    lines += ["", block] if block else []
+    lines += ["", verify_tail(continues_left, stopped)]
     return "\n".join(lines)
 
 
@@ -224,8 +243,10 @@ def language_line() -> str:
 
 
 def later_wake(event: str, opencode_reply: str, rounds: int, continues_left: int = 5, outside: str | None = None,
-               stopped: bool = False) -> str:
-    return "\n".join([event_block(event, opencode_reply, rounds, outside), "", language_line(), "", verify_tail(continues_left, stopped)])
+               stopped: bool = False, delegated: list[dict] | None = None) -> str:
+    block = delegated_block(delegated)
+    return "\n".join([event_block(event, opencode_reply, rounds, outside), *(["", block] if block else []), "", language_line(), "",
+                      verify_tail(continues_left, stopped)])
 
 
 def validate_verify(allow_relay: bool, why: str | None = None):
