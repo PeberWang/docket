@@ -66,6 +66,19 @@ class PluginApi(unittest.TestCase):
     def test_the_pm_runs_in_its_own_agent_once_that_is_set(self):
         self.assertEqual(self.docket.delegation("ses_x")["pm_key"], "agent:main:docket-x")
         self.assertEqual(ledger.pm_key("ses_ab_c", "docket-pm"), "agent:docket-pm:ab-c")
+        # The PM's own agent is named on the command line; the main agent's PMs run as before.
+        self.assertEqual(pm.agent_args("agent:docket-pm:ab-c"), ["--agent", "docket-pm"])
+        self.assertEqual(pm.agent_args("agent:main:docket-x"), [])
+
+    def test_a_new_handoff_takes_the_pm_agent_from_the_settings(self):
+        self.docket.settings["pm_agent"] = "docket-pm"
+        self.docket.dispatch_cli = daemon.Docket.dispatch_cli.__get__(self.docket)
+        launched = []
+        self.docket.launch = lambda handoff, prompt, first: launched.append(handoff)
+        self.docket.attach_context = lambda *a: None
+        handoff = self.docket.dispatch_cli("claude", "t", str(Path.home()), "do it", "", None)
+        self.assertTrue(self.docket.delegation(handoff)["pm_key"].startswith("agent:docket-pm:"))
+        self.assertEqual(launched, [handoff])
 
     def test_a_pm_agent_that_is_not_an_agent_id_falls_back_to_main(self):
         path = docket_config.PATH

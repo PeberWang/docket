@@ -20,6 +20,7 @@ cd <project dir> && ~/.openclaw/workspace/skills/desk-dispatch/scripts/desk-disp
 - `--engine opencode|claude|codex` picks the agent. Leave it out to use the user's default (OpenCode unless they set another).
 - `--auto` lets OpenCode approve its own permission requests (OpenCode only; Claude Code and Codex use Docket's unattended settings). OpenCode 2.2 and later runs unattended anyway: Docket answers the requests itself, approving what is inside the project and putting writes outside it on a card.
 - `--model <id>` passes a model to the agent.
+- `--supersedes <handoff id>` redoes earlier work: the new handoff replaces that one, which Docket stops and closes as "replaced by …". Use it whenever the user wants the same thing done again or differently, instead of a second, unrelated handoff.
 - The script returns at once with one line: `dispatched in background: …`. You get no completion notice, on purpose.
 
 ## Then
@@ -34,14 +35,21 @@ When the user says something more about a handed-off task (go on, a correction, 
 ~/.openclaw/workspace/skills/desk-dispatch/scripts/docket note <handoff id> "<what the user said, in their words>" --from agent:main:main
 ```
 
-`docket list` shows the handoff ids (a unique prefix is enough); `docket status <id>` shows where one stands. Docket logs the note, wakes the handoff's PM itself and carries out what the PM answers.
+`docket list` shows the handoff ids (a unique prefix is enough); `docket status <id>` shows where one stands. With the Docket plugin installed, the open handoffs are also listed at the top of your turn in a `<docket>` block. Docket logs the note, wakes the handoff's PM itself and carries out what the PM answers. Passing words on costs the user nothing: only answering a card on the panel uses one of a handoff's three rounds.
+
+When a handoff closes, its conclusion reaches you once in a `<docket-conclusion>` block and is written to the day's memory. Mention it only if it matters to what the user is doing now.
 
 ## Don't
 
 - Don't call `opencode run`, `claude -p` or `codex exec` yourself for a handed-off task, and don't run `opencode-dispatch -s`: only Docket sends instructions to the coding agent.
 - Don't send follow-ups with this script (`-s` is refused). Docket sends them after the user decides.
-- Don't `sessions_send` into a Docket PM session (`agent:main:docket-*`): nobody carries out what the PM answers you there. Use `docket note`.
-- Inside a Docket PM session (`agent:main:docket-*`, or `agent:main:desk-*` for handoffs started before the rename) never dispatch new work.
+- Don't `sessions_send` into a Docket PM session (`agent:docket-pm:*`, or `agent:main:docket-*` and `agent:main:desk-*` for older handoffs): nobody carries out what the PM answers you there. Use `docket note`.
+- Inside a Docket PM session never dispatch new work.
+- If a command is refused with "Docket refused this", do what the refusal says instead; do not look for another way around it.
+
+## In the chat
+
+The user can type `/docket list`, `/docket status <id>` or `/docket note <id> <words>` themselves; these go to Docket without you.
 
 ## Requirements
 

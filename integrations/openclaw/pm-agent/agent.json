@@ -1,0 +1,11 @@
+{
+  "//": "agents.entries.docket-pm in openclaw.json; scripts/install.sh writes it with the workspace path filled in",
+  "workspace": "${DOCKET_PM_WORKSPACE}",
+  "skills": [],
+  "bootstrapTotalMaxChars": 8000,
+  "tools": {
+    "allow": ["read", "exec", "process"],
+    "deny": ["group:messaging", "group:sessions", "group:automation"],
+    "agentToAgent": { "send": [] }
+  }
+}

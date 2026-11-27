@@ -1,7 +1,7 @@
 """The PM: one OpenClaw session per handoff, woken only when something happened.
 
-The daemon calls `openclaw agent --session-key agent:main:docket-<id>` without
-`--deliver`, so nothing reaches the chat channel. The PM may use its tools (read the
+The daemon calls `openclaw agent --session-key agent:docket-pm:<id>` (the PM's own agent, once
+installed; agent:main:docket-<id> without it) without `--deliver`, so nothing reaches the chat channel. The PM may use its tools (read the
 handoff doc, run the tests) but its final reply must be one JSON object; code digs it out
 of whatever prose surrounds it, validates it, asks once more with the errors if it is off,
 and once more on the fallback model. Three misses are the docket's own failure, shown as
@@ -509,13 +509,20 @@ def close_wake(reply: str) -> str:
 
 # ---------- running and validating ----------
 
+def agent_args(session_key: str) -> list[str]:
+    """--agent for a PM in its own agent: the key names it, and OpenClaw wants the two to agree."""
+    parts = session_key.split(":")
+    return ["--agent", parts[1]] if len(parts) >= 3 and parts[0] == "agent" and parts[1] != "main" else []
+
+
 def run(session_key: str, message: str, timeout: int = TIMEOUT, model: str | None = None) -> str:
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as handle:
         handle.write(message)
         path = handle.name
     try:
         done = subprocess.run(
-            ["openclaw", "agent", "--session-key", session_key, *(["--model", model] if model else []), "--json", "--timeout", str(timeout), "--message-file", path],
+            ["openclaw", "agent", *agent_args(session_key), "--session-key", session_key, *(["--model", model] if model else []),
+             "--json", "--timeout", str(timeout), "--message-file", path],
             capture_output=True,
             text=True,
             timeout=timeout + 60,
