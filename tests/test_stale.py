@@ -502,7 +502,8 @@ class Stale(unittest.TestCase):
         self.assertEqual(self.state(), "limit")
         self.assertEqual((self.docket.delegation("ses_s")["rounds"], self.wakes), (3, []))
 
-    def test_a_docket_failure_card_only_expires(self):
+    def test_a_docket_failure_card_never_expires(self):
+        """Faults never close work: the card waits for a retry or for the person to close it."""
         card = self.card(5, {"kind": "failure", "progress": "案头出错", "decisions": [], "decided_for_you": [], "docket_fault": True})
         self.say("按发表时间")
         self.docket.sweep_stale()
@@ -510,7 +511,8 @@ class Stale(unittest.TestCase):
         self.assertIsNone(self.row(card)["resolved_at"])
         self.age(card, 25)
         self.docket.sweep_stale()
-        self.assertEqual(self.state(), "closed")
+        self.assertIsNone(self.row(card)["resolved_at"])
+        self.assertEqual(self.state(), "awaiting")
 
     def test_a_held_lock_is_not_waited_on(self):
         card = self.card(25)
