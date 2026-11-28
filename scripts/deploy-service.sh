@@ -64,6 +64,11 @@ EOF
 
 if [ "${1:-}" != "--no-restart" ]; then
   launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "$DOMAIN" "$PLIST"
+  # bootout returns before the job is gone; bootstrapping too early fails with "5: Input/output error".
+  for _ in $(seq 1 20); do
+    launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || { sleep 2; launchctl bootstrap "$DOMAIN" "$PLIST"; }
 fi
 echo "service code $(cat "$LIB/VERSION") in $LIB"
