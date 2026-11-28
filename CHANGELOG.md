@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 (2026-11-27)
+
+- Permissions come in two layers that never mix (with opencode-permission-notify): when you use the coding agent yourself, only its own rules apply; what you set in the permissions window applies only when Docket's PM works with the coding agent for you in a handoff. 0.2.0 still let those settings change your own sessions.
+- The permissions window shows the coding agent's own rule for each class, read from its configuration, next to your choice for the PM, opens only once, and carries Docket's icon in the Dock.
+
 ## 0.2.0 (2026-11-27)
 
 This release makes Docket hold together under daily use: one lifecycle per handoff, a PM that only judges, the person's attention spent only on decisions, and a record of every step. It was measured against an audit of ten days of the author's own handoffs before and after.
