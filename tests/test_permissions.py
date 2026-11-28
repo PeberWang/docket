@@ -18,6 +18,7 @@ from docket import daemon, engines, ledger, permissions, pm  # noqa: E402
 
 CARD = {"kind": "report", "progress": "p", "decisions": [], "decided_for_you": []}
 REAL_RESUME = engines.OpenCode.resume  # other suites swap it in setUp and leave it swapped
+REAL_ASK = pm.ask
 
 
 def line(session, tier, cls="4", effect="allow", **extra):
@@ -43,8 +44,7 @@ class Permissions(unittest.TestCase):
 
         daemon.Service = engines.Service = FakeService
         engines.OpenCode.resume = lambda engine, handoff, text, model=None, **sent_as: None
-        real_ask = pm.ask
-        self.addCleanup(setattr, pm, "ask", real_ask)
+        self.addCleanup(setattr, pm, "ask", pm.ask)
         pm.ask = lambda key, message, validate, record=None: self.messages.append(message) or {"action": "close", "conclusion": "done"}
         daemon.ledger.DB = Path(tempfile.mkdtemp()) / "docket.sqlite"
         ledger.connect.__defaults__ = (daemon.ledger.DB,)
@@ -155,6 +155,19 @@ class Permissions(unittest.TestCase):
         self.assertEqual(self.events("permission:pm-decided")[0]["reason"], "build output")
         self.docket.permission_pass()  # decided once
         self.assertEqual(len(self.messages), 1)
+
+    def test_a_real_pm_reply_keeps_its_decision(self):
+        """2026-11-27: the reply went through the card shaping and lost "decision", so every class 1
+        request went to the popup. This one goes through pm.ask's own parsing, only the wake is faked."""
+        pm.ask = REAL_ASK
+        reply = 'Checked the brief.\n{"decision": "allow", "reason": "build output the task makes"}'
+        original = pm.run
+        pm.run = lambda key, message, timeout=pm.TIMEOUT, model=None: reply
+        self.addCleanup(setattr, pm, "run", original)
+        self.held(["rm -rf build"])
+        self.docket.permission_pass()
+        self.assertEqual(self.answer(), {"decision": "once", "by": "docket-pm"})
+        self.assertEqual(self.events("permission:pm-decided")[0]["reason"], "build output the task makes")
 
     def test_an_unsure_pm_hands_it_to_the_person(self):
         pm.ask = lambda key, message, validate, record=None: {"decision": "ask", "reason": "not sure it is safe"}

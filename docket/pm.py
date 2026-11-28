@@ -875,6 +875,9 @@ def _plain_deep(value):
 def normalize(value: dict) -> dict:
     """A validated reply as Docket keeps it: only the known fields, user-facing text plain, and the
     instruction for the coding agent exactly as the PM wrote it (code, paths and Markdown included)."""
+    if "action" not in value and "decision" in value and not ({"progress", "kind", "decisions"} & set(value)):
+        # A permission decision (permission_wake): its two fields, nothing a card would add or drop.
+        return {"decision": value["decision"], "reason": plain(str(value.get("reason") or ""))}
     if "action" not in value:  # a brief on its own (write_card)
         return _plain_deep(shape_card(value))
     value = {k: value[k] for k in ACTION_KEYS if k in value}
