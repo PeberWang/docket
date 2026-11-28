@@ -175,6 +175,35 @@ def delegated_block(delegated: list[dict] | None) -> str | None:
     return untrusted("permission-notify", "\n".join(lines))
 
 
+def permission_wake(batch: dict) -> str:
+    """A class 1 request the person delegated to the PM: decide it now, OpenCode waits."""
+    what = "\n".join(f"- {w}" for w in (batch.get("what") or [])[:6]) or "- (no detail)"
+    return "\n".join([
+        "OpenCode wants to do something irreversible or outside the project (permission class 1), and is waiting on it now.",
+        "The person's permission settings delegate this kind of request to you for this handoff, instead of asking them.",
+        untrusted("opencode", f"Requested:\n{what}"),
+        "",
+        "Decide against the brief and what the person said:",
+        "- allow: it is plainly part of this task and does no harm beyond it (for example deleting build output the task makes);",
+        "- reject: it is not part of the task, or could lose work or data the person did not ask to lose;",
+        "- ask: you are not sure. The person is then asked in their popup. When in doubt, ask.",
+        "Do not wait or run anything to find out; decide from what you know. A long answer leaves the decision to the person.",
+        "",
+        'Reply with one JSON object: {"decision": "allow" | "reject" | "ask", "reason": "one short sentence"}',
+    ])
+
+
+def validate_permission(value) -> list[str]:
+    if not isinstance(value, dict):
+        return ["reply with one JSON object"]
+    errors = []
+    if value.get("decision") not in ("allow", "reject", "ask"):
+        errors.append('decision must be "allow", "reject" or "ask"')
+    if not isinstance(value.get("reason"), str) or not value["reason"].strip():
+        errors.append("reason must be one short sentence")
+    return errors
+
+
 def first_wake(handoff: dict, context: list[dict], event: str, opencode_reply: str, continues_left: int = 5,
                outside: str | None = None, stopped: bool = False, delegated: list[dict] | None = None) -> str:
     lines = [rules(), "", f"## Handoff: {handoff['title']}", f"OpenCode session: {handoff['id']}"]

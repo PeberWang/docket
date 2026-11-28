@@ -8,8 +8,9 @@ popup. What it agreed with Docket, and what this module does about it:
   and class 1 falls back to the popup even where the person delegated it;
 - its ledger (`ledger.jsonl`, one JSON line per decision): Docket reads what was decided in its
   handoffs' sessions, so the PM reviews what was allowed on its behalf, and the audit keeps it;
-- the batches waiting for the person (`pending/<batch>.json`): a run waiting there is waiting for
-  the person, not stuck.
+- the batches waiting (`pending/<batch>.json`): a run waiting there is waiting, not stuck. A batch
+  with `reviewer: "pm"` is a class 1 request the person delegated to the PM: it is held until the PM
+  decides (`replies/<batch>.json`), and goes to the person's popup when the PM escalates or is late.
 
 Paths follow permission-notify's own environment variables, so both sides always agree.
 """
@@ -25,6 +26,7 @@ ROOT = HOME / "Library/Application Support/opencode/permission-notify"
 HEARTBEAT = Path(os.environ.get("PERMISSION_NOTIFY_PM_HEARTBEAT", ROOT / "pm-online"))
 LEDGER = Path(os.environ.get("PERMISSION_NOTIFY_LEDGER", ROOT / "ledger.jsonl"))
 PENDING = Path(os.environ.get("PERMISSION_NOTIFY_PENDING", ROOT / "pending"))
+REPLIES = Path(os.environ.get("PERMISSION_NOTIFY_REPLIES", ROOT / "replies"))
 
 READ_LIMIT = 4 * 1024 * 1024  # bytes per pass: a long backlog is read over several passes
 
@@ -90,6 +92,28 @@ def waiting() -> list[dict]:
         if isinstance(entry, dict) and entry.get("session"):
             out.append(entry)
     return out
+
+
+def still_for_pm(batch_id: str) -> bool:
+    """Whether a batch still waits on the PM (not answered, not handed to the person meanwhile)."""
+    try:
+        return json.loads((PENDING / f"{batch_id}.json").read_text(encoding="utf-8")).get("reviewer") == "pm"
+    except (OSError, ValueError):
+        return False
+
+
+def reply(batch_id: str, decision: str | None) -> bool:
+    """The PM's answer to a batch: "once" or "reject", or None to hand it to the person (escalate).
+    Written whole (temporary file, then rename), since permission-notify polls for it."""
+    body = {"decision": decision, "by": "docket-pm"} if decision else {"escalate": True, "by": "docket-pm"}
+    try:
+        REPLIES.mkdir(parents=True, exist_ok=True)
+        temp = REPLIES / f".{batch_id}.json.tmp"
+        temp.write_text(json.dumps(body), encoding="utf-8")
+        temp.replace(REPLIES / f"{batch_id}.json")
+        return True
+    except OSError:
+        return False
 
 
 def summary(entry: dict) -> dict:

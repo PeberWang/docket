@@ -2341,7 +2341,11 @@ class Docket:
         for batch in permissions.waiting():
             row = self.delegation_for_session(batch["session"])
             if not row or row["state"] in ("closed", "taken_over"):
+                if batch.get("reviewer") == "pm" and batch.get("batch") and ledger.claim(db, f"permission_decide:{batch['batch']}"):
+                    permissions.reply(batch["batch"], None)  # no PM for it here: the person decides
                 continue
+            if batch.get("reviewer") == "pm" and batch.get("batch") and ledger.claim(db, f"permission_decide:{batch['batch']}"):
+                self.submit(row["id"], self.decide_permission, row["id"], batch)
             # Waiting for the person in the popup is not being stuck: it counts as activity for the watchdog.
             self.activity_at = getattr(self, "activity_at", {})
             self.activity_at.pop(batch["session"], None)
@@ -2367,6 +2371,31 @@ class Docket:
         if tier == "human" and entry.get("effect") == "deny":
             kind = "permission:denied"
         ledger.log(self.db(), row["id"], kind, permissions.summary(entry))
+
+    def decide_permission(self, delegation_id: str, batch: dict):
+        """A class 1 request the person delegated to the PM (permission-notify holds it meanwhile). The PM
+        allows, rejects or hands it to the person; anything the risk rules flag goes to the person unless
+        the person's own words asked for that act, and a PM that fails or is late leaves it to the person."""
+        db = self.db()
+        what = [str(w)[:300] for w in (batch.get("what") or [])]
+        entry = {"batch": batch.get("batch"), "class": str(batch.get("class") or ""), "what": [w[:160] for w in what[:3]]}
+        danger = risk.of(" ; ".join(what))
+        said = " ".join(json.loads(r[0] or "{}").get("text", "") for r in
+                        db.execute("select detail from events where delegation_id = ? and kind = 'note' order by id", (delegation_id,)))
+        if danger and not risk.asked_for(danger, said):
+            decision, reason = None, f"risky ({danger}): the person decides"
+        else:
+            try:
+                action = self.ask_pm(self.delegation(delegation_id), pm.permission_wake(batch), pm.validate_permission)
+                decision = {"allow": "once", "reject": "reject"}.get(action["decision"])
+                reason = action["reason"][:300]
+            except Exception as error:
+                decision, reason = None, f"the PM did not decide: {str(error)[:200]}"
+        if not permissions.still_for_pm(batch.get("batch") or ""):
+            ledger.log(db, delegation_id, "permission:pm-late", {**entry, "decision": decision, "reason": reason})
+            return
+        permissions.reply(batch["batch"], decision)
+        ledger.log(db, delegation_id, "permission:pm-decided" if decision else "permission:escalated", {**entry, "decision": decision, "reason": reason})
 
     def delegated_since(self, delegation_id: str, since: int) -> list[dict]:
         """What permission-notify let through on the PM's behalf since `since`: for the PM to review."""

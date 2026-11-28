@@ -27,8 +27,9 @@ def line(session, tier, cls="4", effect="allow", **extra):
 class Permissions(unittest.TestCase):
     def setUp(self):
         root = Path(tempfile.mkdtemp())
-        self.patch = {name: getattr(permissions, name) for name in ("HEARTBEAT", "LEDGER", "PENDING")}
+        self.patch = {name: getattr(permissions, name) for name in ("HEARTBEAT", "LEDGER", "PENDING", "REPLIES")}
         permissions.HEARTBEAT, permissions.LEDGER, permissions.PENDING = root / "pm-online", root / "ledger.jsonl", root / "pending"
+        permissions.REPLIES = root / "replies"
         self.addCleanup(lambda: [setattr(permissions, k, v) for k, v in self.patch.items()])
         self.messages = []
 
@@ -132,6 +133,58 @@ class Permissions(unittest.TestCase):
         self.assertIsNotNone(row[0])
         self.assertEqual(row[1], "form")
         self.assertEqual(self.events("turn:answered-question")[0]["forms"], ["frm_1"])
+
+    # ---------- class 1 delegated to the PM: it decides before anything runs ----------
+
+    def held(self, what, batch="b9"):
+        permissions.PENDING.mkdir(exist_ok=True)
+        entry = {"batch": batch, "session": "ses_x", "class": "1", "what": what, "reviewer": "pm"}
+        (permissions.PENDING / f"{batch}.json").write_text(json.dumps(entry))
+        return entry
+
+    def answer(self, batch="b9"):
+        return json.loads((permissions.REPLIES / f"{batch}.json").read_text())
+
+    def test_the_pm_allows_what_is_part_of_the_task(self):
+        pm.ask = lambda key, message, validate, record=None: self.messages.append(message) or {"decision": "allow", "reason": "build output"}
+        self.held(["rm -rf build"])
+        self.docket.permission_pass()
+        self.assertEqual(self.answer(), {"decision": "once", "by": "docket-pm"})
+        self.assertIn("rm -rf build", self.messages[-1])
+        self.assertEqual(self.events("permission:pm-decided")[0]["reason"], "build output")
+        self.docket.permission_pass()  # decided once
+        self.assertEqual(len(self.messages), 1)
+
+    def test_an_unsure_pm_hands_it_to_the_person(self):
+        pm.ask = lambda key, message, validate, record=None: {"decision": "ask", "reason": "not sure it is safe"}
+        self.held(["rm -rf data"])
+        self.docket.permission_pass()
+        self.assertEqual(self.answer(), {"escalate": True, "by": "docket-pm"})
+        self.assertEqual(len(self.events("permission:escalated")), 1)
+
+    def test_a_risky_act_goes_to_the_person_without_asking_the_pm(self):
+        pm.ask = lambda key, message, validate, record=None: self.fail("the PM is not asked")
+        self.held(["git push origin main"])
+        self.docket.permission_pass()
+        self.assertEqual(self.answer(), {"escalate": True, "by": "docket-pm"})
+        self.assertIn("push", self.events("permission:escalated")[0]["reason"])
+
+    def test_a_late_pm_answer_is_dropped_once_the_person_has_it(self):
+        def slow(key, message, validate, record=None):
+            (permissions.PENDING / "b9.json").write_text(json.dumps({"batch": "b9", "session": "ses_x", "reviewer": "person"}))
+            return {"decision": "allow", "reason": "fine"}
+
+        pm.ask = slow
+        self.held(["rm -rf build"])
+        self.docket.permission_pass()
+        self.assertFalse((permissions.REPLIES / "b9.json").exists())
+        self.assertEqual(len(self.events("permission:pm-late")), 1)
+
+    def test_a_batch_held_for_a_handoff_that_ended_goes_to_the_person(self):
+        self.docket.finish("ses_x", "done")
+        self.held(["rm -rf build"])
+        self.docket.permission_pass()
+        self.assertEqual(self.answer(), {"escalate": True, "by": "docket-pm"})
 
     def test_without_delegated_requests_the_wake_is_unchanged(self):
         self.docket.track("ses_x", "ses_x", "build it", "dispatch")
