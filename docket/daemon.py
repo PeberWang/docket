@@ -280,6 +280,8 @@ class Docket:
             return f"card, put on the panel at {at}; " + (f"it was {how}." if card["resolved_at"] else "it is still waiting.")
         if kind == "close":
             return f"close, the handoff was closed at {at}."
+        if kind == "hold":
+            return f"hold, kept for the record at {at}; nothing was sent."
         return f"it could not be carried out ({detail.get('error') or 'docket fault'}), at {at}; Docket showed a failure card."
 
     @staticmethod
@@ -1123,7 +1125,7 @@ class Docket:
             if text and state not in ("closed", "limit", "taken_over") and self.acting:
                 ledger.log(db, row["id"], "orphan:rewake", {"seq": found[-1]["seq"]})
                 ledger.set_state(db, row["id"], "pending")
-                return (self.act, row["id"], pm.note_wake(text, found[-1]["source"], row["rounds"]), None, "orphan", None, state)
+                return (self.act, row["id"], pm.orphan_wake(text, found[-1]["source"], row["rounds"]), None, "orphan", None, state)
             ledger.log(db, row["id"], "orphan:ignored", {"seq": found[-1]["seq"], "state": state, **({} if self.acting else {"observing": True})})
             return None
         action = latest["action"]
