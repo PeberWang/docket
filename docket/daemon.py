@@ -40,7 +40,7 @@ from judge.transcript import messages as transcript_messages  # noqa: E402
 
 DISCOVERY = ledger.HOME / "daemon.json"
 MEMORY_DIR = Path.home() / ".openclaw/workspace/memory"
-HEALTH_DIR = Path(os.environ.get("DOCKET_HEALTH_DIR", Path.home() / ".openclaw/workspace/cron-logs/docket"))
+HEALTH_DIR = Path(os.environ.get("DOCKET_HEALTH_DIR", ledger.HOME / "health"))  # config.json "health_dir" overrides
 MENTION_POLL = 5
 # s a judged chat message waits for the main agent to pass it on with docket note itself (its first tool
 # call usually comes well inside this). A note that comes later still costs no second round (paid_for).
@@ -1214,13 +1214,13 @@ class Docket:
     # ---------- the daily health summary ----------
 
     def write_health(self, day: dt.date | None = None):
-        """~/.openclaw/workspace/cron-logs/docket/<date>/health.md (and .json): how often work got stuck
+        """<health_dir>/<date>/health.md (and .json): how often work got stuck
         today, how often the docket got it moving again by itself, and how often a person had to step in."""
         days = [day] if day else [dt.date.today() - dt.timedelta(days=1), dt.date.today()]
         for when in days:
             start = int(dt.datetime.combine(when, dt.time()).timestamp() * 1000)
             report = health(self.db(), start, start + 86400_000)
-            folder = HEALTH_DIR / f"{when:%Y-%m-%d}"
+            folder = Path(self.settings.get("health_dir") or HEALTH_DIR).expanduser() / f"{when:%Y-%m-%d}"
             if when != dt.date.today() and (folder / "health.json").exists():
                 continue  # a past day is written once more after midnight, then left alone
             folder.mkdir(parents=True, exist_ok=True)

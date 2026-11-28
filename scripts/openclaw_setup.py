@@ -2,6 +2,7 @@
 """Wire OpenClaw for Docket, once and idempotently (architecture section 11, steps 3 to 5).
 
     openclaw_setup.py [--dry-run] [--no-plugin] [--no-pm-agent] [--no-skill]
+    openclaw_setup.py --remove [--dry-run]     undo it: unlink the plugin and stop using the PM agent
 
 1. the plugin: its folder in plugins.load.paths (what `plugins install --link` writes, but that command
    needs the Gateway stopped, while the Gateway applies load.paths live), enabled, conversation access
@@ -204,6 +205,32 @@ class Setup:
             self.changed.append(f"install the skill into {target}")
 
 
+    def removal(self, config: dict) -> dict:
+        """What --remove patches: the plugin out of load.paths, plugins.allow and plugins.entries. The
+        docket-pm agent is left in place (it holds the PMs' session history); the command to delete it
+        is printed instead."""
+        plugins = config.get("plugins") or {}
+        out: dict = {"entries": {PLUGIN_ID: None}}
+        paths = (plugins.get("load") or {}).get("paths")
+        if isinstance(paths, list):
+            out["load"] = {"paths": [p for p in paths if str(p) != str(PLUGIN) and not str(p).rstrip("/").endswith("integrations/openclaw/plugin")]}
+        if isinstance(plugins.get("allow"), list):
+            out["allow"] = [p for p in plugins["allow"] if p != PLUGIN_ID]
+        return {"plugins": out}
+
+    def remove(self, config: dict):
+        body = json.dumps(self.removal(config), ensure_ascii=False, indent=2)
+        self.out("openclaw.json patch:\n" + body)
+        argv = ["openclaw", "config", "patch", "--stdin"]
+        if self.dry_run:
+            done = self.run([*argv, "--dry-run"], body)
+            self.out("the patch validates" if done.returncode == 0 else f"the patch does not validate: {(done.stderr or done.stdout)[-400:]}")
+        else:
+            self.act("unlink the Docket plugin", argv, body)
+        if AGENT_ID in ((config.get("agents") or {}).get("entries") or {}):
+            self.out(f"the agent {AGENT_ID} is kept with its PM sessions; to delete it: openclaw agents delete {AGENT_ID}")
+
+
 def tree_hash(root: Path) -> str:
     """The skill's files, not the docket link the installer adds, nor caches."""
     digest = hashlib.sha256()
@@ -219,6 +246,7 @@ def main(argv=None) -> int:
     parser.add_argument("--no-plugin", action="store_true")
     parser.add_argument("--no-pm-agent", action="store_true")
     parser.add_argument("--no-skill", action="store_true")
+    parser.add_argument("--remove", action="store_true")
     args = parser.parse_args(argv)
     data = Path(os.environ.get("DOCKET_HOME", Path.home() / "Library/Application Support/docket"))
     setup = Setup(data, Path(os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw")), args.dry_run,
@@ -228,6 +256,9 @@ def main(argv=None) -> int:
         return 1
     try:
         config = setup.config()
+        if args.remove:
+            setup.remove(config)
+            return 0
         if not args.no_plugin:
             setup.install_plugin(config)
         if not args.no_pm_agent:

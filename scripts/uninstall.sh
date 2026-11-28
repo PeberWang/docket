@@ -12,7 +12,10 @@ for job in "$LABEL.app" "$LABEL"; do
   launchctl bootout "$DOMAIN/$job" 2>/dev/null || true
   rm -f "$HOME/Library/LaunchAgents/$job.plist"
 done
-rm -rf "$HOME/Applications/Docket.app" "$HOME/.openclaw/workspace/skills/desk-dispatch"
+if command -v openclaw >/dev/null; then
+  /usr/bin/python3 -I "$(cd "$(dirname "$0")" && pwd)/openclaw_setup.py" --remove || echo "OpenClaw was not changed; unlink the plugin with: openclaw plugins uninstall docket"
+fi
+rm -rf "$HOME/Applications/Docket.app" "$HOME/.openclaw/workspace/skills/desk-dispatch" "$DATA/lib" "$DATA/pm-workspace"
 rm -f "$DATA/config.json" "$DATA/daemon.json"
 defaults delete "$LABEL" 2>/dev/null || true
 

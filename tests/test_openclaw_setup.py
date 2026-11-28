@@ -120,6 +120,17 @@ class OpenClawSetup(unittest.TestCase):
         self.assertIn("skill desk-dispatch is current", self.lines)
         self.assertEqual(len(list(target.parent.glob("desk-dispatch.bak-*"))), 1)
 
+    def test_remove_unlinks_the_plugin_and_keeps_everything_else(self):
+        config = {"plugins": {"allow": ["browser", "docket"], "load": {"paths": ["/other/plugin", str(setup_module.PLUGIN)]},
+                              "entries": {"docket": {"enabled": True}, "browser": {"enabled": True}}},
+                  "agents": {"entries": {"docket-pm": {}}}}
+        patch = self.setup().removal(config)["plugins"]
+        self.assertEqual(patch["allow"], ["browser"])
+        self.assertEqual(patch["load"]["paths"], ["/other/plugin"])
+        self.assertEqual(patch["entries"], {"docket": None})  # null deletes the entry; others untouched
+        self.setup(dry_run=True).remove(config)
+        self.assertTrue(any("openclaw agents delete docket-pm" in line for line in self.lines))
+
     def test_it_never_links_the_plugin_from_a_worktree(self):
         setup_module.PLUGIN = Path("/repo/.worktrees/x/integrations/openclaw/plugin")
         with self.assertRaises(RuntimeError):
