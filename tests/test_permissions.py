@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from docket import daemon, engines, ledger, permissions, pm  # noqa: E402
 
 CARD = {"kind": "report", "progress": "p", "decisions": [], "decided_for_you": []}
+REAL_RESUME = engines.OpenCode.resume  # other suites swap it in setUp and leave it swapped
 
 
 def line(session, tier, cls="4", effect="allow", **extra):
@@ -262,6 +263,7 @@ class AgentQuestions(unittest.TestCase):
         engines.Service = lambda: service
         self.addCleanup(setattr, engines, "Service", real)
         engine = engines.OpenCode({"engines": {"opencode": {"transport": "http"}}})
+        engine.resume = REAL_RESUME.__get__(engine)
         run = engine.resume({"id": "ses_x", "engine_session": "ses_x"}, "中文", message_id="msg_d", metadata={"docket": {}})
         self.assertEqual((run["transport"], run["message"]), ("form", None))
         self.assertFalse(any(path.endswith("/prompt") for _, path, _ in calls))  # no instruction queued behind it
