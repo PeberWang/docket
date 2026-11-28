@@ -36,14 +36,35 @@ RISKS = (
 _COMPILED = tuple((kind, re.compile(act, re.I), re.compile(asked, re.I)) for kind, act, asked in RISKS)
 
 
+# Words that turn a request into its opposite when they come just before it: "don't push", "先不要部署".
+_NEGATION = re.compile(r"(?:\b(?:don'?t|do not|never|not|no|without|stop)\b|不要|别|不用|不许|禁止|先不|暂不|不必)[^.,;。，；\n]{0,12}$", re.I)
+
+
+def kinds(message: str | None) -> list[str]:
+    """Every kind of risk the instruction carries, in the order of RISKS."""
+    return [kind for kind, act, _ in _COMPILED if act.search(message or "")]
+
+
 def of(message: str | None) -> str | None:
     """The first kind of risk the instruction carries, or None."""
-    for kind, act, _ in _COMPILED:
-        if act.search(message or ""):
-            return kind
-    return None
+    found = kinds(message)
+    return found[0] if found else None
 
 
 def asked_for(kind: str, said: str | None) -> bool:
-    """Whether the person's own words ask for this kind of act."""
-    return bool(said) and any(k == kind and asked.search(said) for k, _, asked in _COMPILED)
+    """Whether the person's own words ask for this kind of act, and do not say not to."""
+    if not said:
+        return False
+    for k, _, asked in _COMPILED:
+        if k != kind:
+            continue
+        for match in asked.finditer(said):
+            if not _NEGATION.search(said[max(0, match.start() - 24):match.start()]):
+                return True
+    return False
+
+
+def unasked(message: str | None, said: str | None) -> str | None:
+    """The first kind of risk in the instruction that the person's words did not ask for, or None
+    when every one was asked for (or there is none). "push" asked for does not clear "push --force"."""
+    return next((kind for kind in kinds(message) if not asked_for(kind, said)), None)

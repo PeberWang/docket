@@ -108,6 +108,13 @@ class Flows(unittest.TestCase):
             self.docket.note("ses_x", "还是按名字吧", "agent:main:main")
         self.assertEqual(self.rounds(), 1)
 
+    def test_words_the_judge_found_in_a_chat_do_not_clear_a_risky_act(self):
+        """Review 2026-11-27 P1-7: a watched chat may hold other people's words; only a click or a note clears it."""
+        self.answers.append({"action": "relay", "message": "git push origin main"})
+        self.mention("测完就推送吧")
+        self.assertEqual(self.sent, [])
+        self.assertTrue(json.loads(ledger.open_card(self.db, "ses_x")["body"]).get("pending_relay"))
+
     def test_words_settle_only_the_card_the_pm_was_shown(self):
         """Review 2026-11-27 P1-3: a card that took the shown one's place meanwhile is not the person's to have answered."""
         shown = self.awaiting_card()

@@ -2004,8 +2004,10 @@ class Docket:
         """Do what a PM answered, and record that it was done (exec:*)."""
         kind = action["action"]
         if kind == "relay":
-            danger = risk.of(action["message"])
-            if danger and not risk.asked_for(danger, said):
+            # Only the person's own words can ask for a risky act: not text the judge attributed from a chat
+            # (which may hold other people's words), and every kind of risk must have been asked for.
+            danger = risk.unasked(action["message"], None if via == "mention" else said)
+            if danger:
                 # Reaches beyond the project and the person did not ask for it: their yes first.
                 shown = self.confirm_relay(delegation_id, action["message"], danger, paid=said is not None and via != "orphan")
                 self.executed(delegation_id, "card", card=shown, risk=danger)
@@ -2412,10 +2414,14 @@ class Docket:
         db = self.db()
         what = [str(w)[:300] for w in (batch.get("what") or [])]
         entry = {"batch": batch.get("batch"), "class": str(batch.get("class") or ""), "what": [w[:160] for w in what[:3]]}
-        danger = risk.of(" ; ".join(what))
+        # What the person said during this run only: an old note asked for an old act.
+        turn = ledger.last_turn(db, delegation_id)
+        since = turn["started_at"] if turn else 0
         said = " ".join(json.loads(r[0] or "{}").get("text", "") for r in
-                        db.execute("select detail from events where delegation_id = ? and kind = 'note' order by id", (delegation_id,)))
-        if danger and not risk.asked_for(danger, said):
+                        db.execute("select detail from events where delegation_id = ? and kind = 'note' and at >= ? order by id",
+                                   (delegation_id, since)))
+        danger = risk.unasked(" ; ".join(what), said)
+        if danger:
             decision, reason = None, f"risky ({danger}): the person decides"
         else:
             try:

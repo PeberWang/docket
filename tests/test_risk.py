@@ -47,3 +47,21 @@ class Risk(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Asked(unittest.TestCase):
+    """Review 2026-11-27 P1-7: every kind must be asked for, and a "don't" is not asking."""
+
+    def test_every_kind_in_the_instruction_must_have_been_asked_for(self):
+        self.assertEqual(risk.kinds("git push --force origin main"), ["push", "history"])
+        self.assertEqual(risk.unasked("git push --force origin main", "push it"), "history")
+        self.assertIsNone(risk.unasked("git push --force origin main", "force push to main"))
+        self.assertEqual(risk.unasked("git push origin main and deploy to production", "push it"), "deploy")
+        self.assertIsNone(risk.unasked("Rename the header.", None))
+
+    def test_a_negation_is_not_asking(self):
+        for said in ("don't push yet", "do not push", "先不要推送", "别部署到线上"):
+            with self.subTest(said=said):
+                self.assertFalse(risk.asked_for("push", said) or risk.asked_for("deploy", said))
+        self.assertTrue(risk.asked_for("push", "tests pass, so push it"))
+        self.assertTrue(risk.asked_for("push", "改完就推送"))
