@@ -38,7 +38,7 @@ The fixes followed from a few product decisions, each taken by the person after 
 
 ## Building and checking it
 
-The work was done in a separate worktree while the running service stayed on the old code, in five phases: validation and audit traces, the PM's lifecycle, driving OpenCode over its HTTP API with its own message ids, the OpenClaw plugin and PM agent, then installation and documentation. The test suite grew from 187 to 283 tests, including the plugin's own.
+The work was done in a separate worktree while the running service stayed on the old code, in five phases: validation and audit traces, the PM's lifecycle, driving OpenCode over its HTTP API with its own message ids, the OpenClaw plugin and PM agent, then installation and documentation. An independent review of the whole change found four blocking issues (three release-hygiene rules and a credential gap in Docket's own permission answers) and a dozen correctness issues, among them a restart that could wake a PM twice and a race between a queued instruction and the end of the work before it; they were fixed before release, and what was not fixed is listed. The test suite grew from 187 to 296 tests, including the plugin's own.
 
 Going live surfaced problems no test had: an OpenCode run waiting on its own question tool, which queued the person's answer behind it; a heartbeat window being taken for the chat it belonged to, so one message woke the PM twice; a plugin manifest field that made OpenClaw reject its whole configuration for a minute; macOS withdrawing launchd's permission to read the clone, which took the service down for three minutes and led to running it from its own copy. Each was traced in the ledger, fixed, and covered by a test.
 
