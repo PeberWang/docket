@@ -1950,6 +1950,10 @@ class Docket:
         takes it up, never when it holds it, and never twice for one message.
         """
         row = self.delegation(delegation_id)
+        if not row or (row["state"] in ("closed", "taken_over") and via not in ("note", "handback")):
+            # Closed or taken over while this job waited (a note may open a closed one; a handback ends a takeover).
+            ledger.log(self.db(), delegation_id, "pm:skipped", {"via": via, "state": row["state"] if row else None})
+            return
         if via == "handback":  # may not close on its own nor skip the brief's reserved items (see pm.handback_wake)
             validate = pm.validate_handback(row["rounds"], row["brief"])
         elif via in ("mention", "note", "orphan"):
@@ -2416,6 +2420,12 @@ class Docket:
         db = self.db()
         what = [str(w)[:300] for w in (batch.get("what") or [])]
         entry = {"batch": batch.get("batch"), "class": str(batch.get("class") or ""), "what": [w[:160] for w in what[:3]]}
+        row = self.delegation(delegation_id)
+        if not row or row["state"] in ("closed", "taken_over"):  # nobody's PM any more: the person decides
+            if permissions.still_for_pm(batch.get("batch") or ""):
+                permissions.reply(batch["batch"], None)
+            ledger.log(db, delegation_id, "permission:escalated", {**entry, "decision": None, "reason": "the handoff ended or was taken over"})
+            return
         # What the person said during this run only: an old note asked for an old act.
         turn = ledger.last_turn(db, delegation_id)
         since = turn["started_at"] if turn else 0

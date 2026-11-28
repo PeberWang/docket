@@ -179,7 +179,10 @@ class Service:
 
     def forms(self, session_id: str) -> list:
         """Questions the agent asked in the session (its question tool) that nobody answered yet."""
-        result = self.get(f"/api/session/{session_id}/form")
+        try:  # an OpenCode without the route has no questions to answer, and must still take instructions
+            result = self.get(f"/api/session/{session_id}/form")
+        except Exception:
+            return []
         items = result.get("data", result) if isinstance(result, dict) else result
         return items if isinstance(items, list) else []
 

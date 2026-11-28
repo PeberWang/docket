@@ -19,6 +19,7 @@ import json
 import sqlite3
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -146,7 +147,7 @@ def note(handoff: str, text: str, source: str) -> str:
     except (OSError, ValueError):
         fail("the Docket service is not running (no daemon.json)")
     request = urllib.request.Request(
-        f"{service['url']}/api/delegations/{handoff}/note",
+        f"{service['url']}/api/delegations/{urllib.parse.quote(handoff, safe='')}/note",
         data=json.dumps({"text": text, "source": source}).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json", "X-Docket-Token": service["token"]},

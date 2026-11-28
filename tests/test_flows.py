@@ -108,6 +108,19 @@ class Flows(unittest.TestCase):
             self.docket.note("ses_x", "还是按名字吧", "agent:main:main")
         self.assertEqual(self.rounds(), 1)
 
+    def test_dockets_own_fault_never_takes_the_pms_question_down(self):
+        """Review 2026-11-27 P2-5."""
+        question = self.docket.show_card("ses_x", "question", dict(CARD, kind="question", progress="q",
+                                         decisions=[{"id": "d1", "question": "A or B?", "options": [{"id": "a", "label": "A", "recommended": True}, {"id": "b", "label": "B"}]}]))
+        self.docket.fail_card("ses_x", "the PM failed three times")
+        self.assertEqual(ledger.open_card(self.db, "ses_x")["id"], question)
+
+    def test_no_pm_wake_for_a_handoff_taken_over_while_the_job_waited(self):
+        """Review 2026-11-27 P2-3."""
+        ledger.set_state(self.db, "ses_x", "taken_over")
+        self.docket.act("ses_x", "wake", "words", "mention")
+        self.assertTrue(self.db.execute("select 1 from events where kind = 'pm:skipped'").fetchone())
+
     def test_words_the_judge_found_in_a_chat_do_not_clear_a_risky_act(self):
         """Review 2026-11-27 P1-7: a watched chat may hold other people's words; only a click or a note clears it."""
         self.answers.append({"action": "relay", "message": "git push origin main"})

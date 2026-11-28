@@ -783,6 +783,8 @@ def validate_action(action) -> list[str]:
             return ["relay needs a non-empty message"]
         errors: list[str] = []
         _placeholder(action["message"], "message", errors)
+        if action.get("delivery") not in (None, "queue", "steer"):  # it goes to OpenCode as is
+            errors.append('delivery must be "queue" or "steer"')
         return errors
     if kind == "close":
         errors = []

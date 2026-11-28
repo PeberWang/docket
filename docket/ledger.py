@@ -270,7 +270,8 @@ def push_card(conn, delegation_id: str, kind: str, body: dict) -> tuple[int, boo
     took_place = False
     shown = open_card(conn, delegation_id)
     decision = kind == "question" or bool(body.get("decisions"))
-    newest_question = decision and not body.get("pending_permission")
+    # Docket's own fault card is not the PM's question: it waits its turn instead of taking a question down.
+    newest_question = decision and not body.get("pending_permission") and not body.get("docket_fault")
     for old in conn.execute(
         "select id, kind, body from cards where delegation_id = ? and resolved_at is null and kind in ('question', 'report')", (delegation_id,)
     ).fetchall():
