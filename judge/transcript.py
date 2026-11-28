@@ -190,18 +190,27 @@ def session_keys(conn: sqlite3.Connection) -> dict[str, str]:
 
 
 def session_id_for(conn: sqlite3.Connection, key: str) -> str | None:
+    """The conversation a session key names now: of the sessions filed under the key itself (or, failing
+    that, its windows such as :heartbeat), the one with the newest transcript event. The last window
+    registered is not it: a heartbeat window registers after the chat it belongs to, so `docket note`
+    used to claim a message there while the judge read the real one (2026-11-27)."""
     key = canonical_key(key)
-    variants = [key] + [key + suffix for suffix in KEY_VARIANTS]
-    marks = ",".join("?" * len(variants))
-    row = conn.execute(
-        f"select session_id from session_windows where session_key in ({marks}) order by rowid desc limit 1", variants
-    ).fetchone()
-    if not row:  # 2026.11 stores keys lowercased ("agent:main:docket-de70…"), the docket keeps the session id's case
-        row = conn.execute(
-            f"select session_id from session_windows where lower(session_key) in ({marks}) order by rowid desc limit 1",
-            [v.lower() for v in variants],
-        ).fetchone()
-    return row[0] if row else None
+    for keys in ([key], [key + suffix for suffix in KEY_VARIANTS]):
+        marks = ",".join("?" * len(keys))
+        ids = [r[0] for r in conn.execute(f"select session_id from session_windows where session_key in ({marks})", keys)]
+        if not ids:  # 2026.11 stores keys lowercased ("agent:main:docket-de70…"), the docket keeps the session id's case
+            ids = [r[0] for r in conn.execute(f"select session_id from session_windows where lower(session_key) in ({marks})",
+                                              [k.lower() for k in keys])]
+        ids = list(dict.fromkeys(i for i in ids if i))
+        if not ids:
+            continue
+        if len(ids) == 1:
+            return ids[0]
+        marks = ",".join("?" * len(ids))
+        row = conn.execute(f"select session_id from transcript_events where session_id in ({marks}) "
+                           "group by session_id order by max(created_at) desc limit 1", ids).fetchone()
+        return row[0] if row else ids[-1]
+    return None
 
 
 # ---------- one event ----------

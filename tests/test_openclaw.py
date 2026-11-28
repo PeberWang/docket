@@ -120,6 +120,15 @@ class Keys(unittest.TestCase):
         self.assertEqual(transcript.session_id_for(conn, "agent:main:main"), MAIN)
         conn.close()
 
+    def test_the_chat_a_key_names_is_its_newest_conversation_not_its_last_window(self):
+        """A heartbeat window registered after the chat must not stand in for it (2026-11-27: docket note
+        claimed a message in the heartbeat session while the judge read the real one, and the PM woke twice)."""
+        events = [("old", 1, 100, new_user("a")), (MAIN, 1, 900, new_user("b")), ("beat", 1, 500, new_user("c"))]
+        windows = [("agent:main:main", "old"), ("agent:main:main", MAIN), ("agent:main:main:heartbeat", "beat")]
+        conn = sqlite3.connect(agent_db(Path(tempfile.mkdtemp()) / "a.sqlite", events, windows))
+        self.assertEqual(transcript.session_id_for(conn, "agent:main:main"), MAIN)
+        conn.close()
+
 
 class Paths(unittest.TestCase):
     def setUp(self):
