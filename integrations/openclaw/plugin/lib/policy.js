@@ -3,9 +3,10 @@
 // that throws or times out as a refusal. No view, or a call it cannot read: null, the call goes through.
 
 // Writes into an OpenCode session. Reads (GET a session, its messages, its diff) stay allowed.
-const DISPATCH_FOLLOW_UP = /\bopencode-dispatch\b[^\n;|&]*?\s(?:-s|--session)(?:\s+|=)(ses_[A-Za-z0-9]+)/g;
-const RUN_IN_SESSION = /\bopencode\s+run\b[^\n;|&]*?\s(?:-s|--session)(?:\s+|=)(ses_[A-Za-z0-9]+)/g;
-const SESSION_ROUTE = /\/api\/session\/(ses_[A-Za-z0-9]+)\/(?:prompt|message|interrupt|abort|command|shell|revert|inbox|permission)\b/g;
+// The id may be quoted, as models often write it ("ses_…" or 'ses_…').
+const DISPATCH_FOLLOW_UP = /\bopencode-dispatch\b[^\n;|&]*?\s(?:-s|--session)(?:\s+|=)["']?(ses_[A-Za-z0-9]+)/g;
+const RUN_IN_SESSION = /\bopencode\s+run\b[^\n;|&]*?\s(?:-s|--session)(?:\s+|=)["']?(ses_[A-Za-z0-9]+)/g;
+const SESSION_ROUTE = /\/api\/session\/["']?(ses_[A-Za-z0-9]+)\/(?:prompt|message|interrupt|abort|command|shell|revert|inbox|permission)\b/g;
 const WRITE_METHOD = /\b(?:post|patch|put|delete)\b|(?:^|\s)(?:-X|--request)\s*(?:POST|PATCH|PUT|DELETE)\b|(?:^|\s)(?:-d|--data(?:-raw|-binary)?|--json)(?:\s|=)/i;
 
 // What a PM may never run: it judges and answers with one action, and Docket carries the action out.

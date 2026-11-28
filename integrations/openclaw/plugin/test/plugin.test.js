@@ -203,6 +203,7 @@ test("/docket lists, shows and passes words on for the owner only", async () => 
   assert.match((await docket.command({ args: "" })).text, /ses_abc123XYZ {2}awaiting {2}list view/);
   assert.match((await docket.command({ args: "status abc" })).text, /rounds {2}1\/3/);
   assert.match((await docket.command({ args: "note abc 按时间排", senderIsOwner: false })).text, /Only the owner/);
+  assert.match((await docket.command({ args: "note abc 按时间排" })).text, /Only the owner/); // unknown is not the owner
   const passed = await docket.command({ args: "note abc 按时间排", senderIsOwner: true, sessionKey: "agent:main:main" });
   assert.match(passed.text, /Passed on to the PM of ses_abc123XYZ/);
   assert.deepEqual(calls.find((c) => c.url.endsWith("/note")).body, { text: "按时间排", source: "agent:main:main" });

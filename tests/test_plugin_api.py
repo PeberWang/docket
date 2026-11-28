@@ -108,6 +108,10 @@ class PluginApi(unittest.TestCase):
         self.assertIn("Sort by date", item["card"])
         json.dumps(view)  # the plugin reads it as JSON
 
+    def test_a_taken_over_session_is_the_persons_and_not_guarded(self):
+        ledger.set_state(self.db, "ses_x", "taken_over")
+        self.assertNotIn("ses_x", self.docket.openclaw_view()["sessions"])
+
     def test_a_closed_handoff_leaves_the_list_but_its_session_stays_guarded(self):
         self.docket.finish("ses_x", "List view done.")
         view = self.docket.openclaw_view()

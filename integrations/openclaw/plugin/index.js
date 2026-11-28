@@ -117,7 +117,8 @@ export function createDocket(api, { client, now = Date.now } = {}) {
       if (verb === "list") return { text: listing(view) };
       if (verb === "status" && id) return { text: status(view, id) };
       if (verb === "note" && id && words.length) {
-        if (ctx?.senderIsOwner === false) return { text: "Only the owner can pass words on to a handoff." };
+        // Words passed on count as the person's own: when ownership is unknown, they are not passed on.
+        if (ctx?.senderIsOwner !== true) return { text: "Only the owner can pass words on to a handoff." };
         const answer = await docket.note(id, words.join(" "), ctx?.sessionKey || "openclaw:/docket");
         return { text: `Passed on to the PM of ${answer.id}.` };
       }

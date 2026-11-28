@@ -2275,7 +2275,9 @@ class Docket:
             "version": 1,
             "round_limit": ledger.ROUND_LIMIT,
             # session -> the handoff to name in `docket note`; the watchdog may have moved a handoff to a new session
-            "sessions": {s: r["id"] for r in reversed(rows) if r["engine"] == "opencode" for s in (r["id"], r["engine_session"]) if s},
+            # A taken-over session is the person's: not guarded (and docket note refuses it anyway).
+            "sessions": {s: r["id"] for r in reversed(rows) if r["engine"] == "opencode" and r["state"] != "taken_over"
+                         for s in (r["id"], r["engine_session"]) if s},
             "pm_agent": agent,
             "pm_prefixes": sorted({"agent:main:docket-", "agent:main:desk-", *([f"agent:{agent}:"] if agent != "main" else [])}),
             "pm_sessions": {r["pm_key"]: r["id"] for r in reversed(rows) if r["pm_key"]},

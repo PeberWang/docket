@@ -23,6 +23,8 @@ test("a follow-up written straight into a handoff's session is refused", () => {
     "opencode api post /api/session/ses_abc123XYZ/prompt --data '{\"text\":\"hi\"}'",
     "curl -X POST http://127.0.0.1:4096/api/session/ses_abc123XYZ/interrupt",
     "curl -s --json '{\"text\":\"x\"}' localhost:4096/api/session/ses_abc123XYZ/message",
+    'opencode run -s "ses_abc123XYZ" "fix it"',
+    "opencode-dispatch --session='ses_abc123XYZ' 'go on'",
   ]) {
     const hit = exec(command);
     assert.equal(hit?.rule, RULES.write, command);
