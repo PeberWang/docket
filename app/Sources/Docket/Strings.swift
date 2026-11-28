@@ -59,7 +59,7 @@ enum StringKey: Sendable {
     // Card
     case round, queued, metaSeparator, justNow, nothingToDecide
     case recommended, handledForYou
-    case answerChoice, youSaid, roundsUsed, roundsUsedTerminal
+    case answerChoice, youSaid, goingOnWith, roundsUsed, roundsUsedTerminal
     case replyPlaceholder, send, close, confirmClose, openInOpenCode, continueInTerminal, handBack, handBackHelp
     // Menu bar
     case showDocket, hideDocket, hidePanel, showPanel, panelHidden, settings, quit
@@ -120,6 +120,7 @@ struct Strings: Sendable {
         .handledForYou: ("Decided for you (%d)", "已代你定 %d 项"),
         .answerChoice: ("%@ → %@", "%@ → %@"),
         .youSaid: ("You said: %@", "你说：%@"),
+        .goingOnWith: ("Going on with your answer: %@", "已按你的回答继续：%@"),
         .roundsUsed: ("All %d rounds used. Take it over in OpenCode.", "已满 %d 轮，请接管"),
         .roundsUsedTerminal: ("All %d rounds used. Take it over in Terminal.", "已满 %d 轮，请在终端接管"),
         .replyPlaceholder: ("Reply…", "回一句…"),

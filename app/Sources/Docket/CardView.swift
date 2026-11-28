@@ -14,6 +14,24 @@ struct CardView: View {
     private var isOpen: Bool { card?.open == true && phase != .closed && phase != .takenOver }
     private var isLimit: Bool { card?.kind == "limit" }
     private var answered: Bool { card != nil && !isOpen }
+
+    /// The work moved on after the person answered this card.
+    private var movingOn: Bool { answered && (phase == .running || phase == .pending) }
+
+    /// What the person answered, in their terms: the option labels they picked, then their own words.
+    private var answerText: String? {
+        guard let card else { return nil }
+        var parts: [String] = []
+        for decision in card.decisions {
+            if let picked = card.choices?[decision.id], let option = decision.options.first(where: { $0.id == picked }) {
+                parts.append(option.label)
+            }
+        }
+        if let reply = card.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
+            parts.append(reply)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "；")
+    }
     private var busy: Bool { store.busy.contains(delegation.id) }
     private var roundLimit: Int { delegation.roundLimit ?? 3 }
 
@@ -46,6 +64,9 @@ struct CardView: View {
             // The run's result (or the conclusion), set apart on its own tinted block.
             if phase == .closed, let conclusion = card?.conclusion, !conclusion.isEmpty {
                 summaryBlock(conclusion).opacity(0.6)  // same weight as a taken-over card: quiet
+            } else if movingOn, let answer = answerText {
+                // The question was answered and the work goes on: its old progress line is news no more.
+                summaryBlock(s(.goingOnWith, answer))
             } else if let progress = card?.progress, !progress.isEmpty {
                 summaryBlock(progress)
                     .opacity(answered ? 0.6 : 1)
