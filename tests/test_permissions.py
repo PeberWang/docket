@@ -208,8 +208,8 @@ class Permissions(unittest.TestCase):
 
 
 class InboxConvention(unittest.TestCase):
-    """A handoff's session is "🦞 …" and archived, also after each of Docket's instructions: OpenCode
-    unarchives a session that takes a prompt (seen on 2.2.7), and the inbox would read it as taken over."""
+    """A handoff's session stays archived, also after each of Docket's instructions: OpenCode unarchives
+    a session that takes a prompt (seen on 2.2.7), and an inbox would read it as taken over."""
 
     def service(self):
         from docket import opencode
@@ -227,19 +227,17 @@ class InboxConvention(unittest.TestCase):
         service.prompt("ses_x", "go")  # not Docket's (no docket metadata): left as it is
         self.assertEqual([c[0] for c in calls], ["POST"])
 
-    def test_a_new_session_is_titled_for_the_inbox(self):
-        from docket import opencode
-
+    def test_a_new_session_carries_dockets_mark_and_the_configured_title(self):
+        """The title is the configured prefix plus the task (no emoji of Docket's own: RELEASE_GATE);
+        what marks the session as a handoff is its metadata."""
         made = []
-        real = opencode.Service
+        real = engines.Service
         fake = type("S", (), {"__init__": lambda self: None, "create_session": lambda self, *a, **k: made.append(a)})
         engines.Service = fake
         self.addCleanup(setattr, engines, "Service", real)
-        engine = engines.OpenCode({})
-        engine.open_session({"id": "ses_x", "directory": None}, "list view")
-        engine.open_session({"id": "ses_y", "directory": None}, "🦞 already")
-        self.assertEqual([m[1] for m in made], ["🦞 list view", "🦞 already"])
-
+        engines.OpenCode({}).open_session({"id": "ses_x", "directory": None}, "list view")
+        self.assertEqual(made[0][1], "list view")
+        self.assertEqual(made[0][3], {"docket": {"handoff": "ses_x"}})
 
 
 class AgentQuestions(unittest.TestCase):

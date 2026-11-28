@@ -112,8 +112,6 @@ class OpenCode(Engine):
         """The handoff's first session, with the handoff's own id (HTTP only; asking twice is harmless).
         Its model is the one the handoff names ("provider/model"), else OpenCode's default."""
         directory = str(dispatches.existing_dir(handoff["directory"])) if handoff.get("directory") else None
-        # The inbox convention, and how opencode-permission-notify knows a handoff's session: "🦞 " first.
-        title = title if title.startswith("🦞") else f"🦞 {title}"
         Service().create_session(handoff["id"], title, directory, {"docket": {"handoff": handoff["id"]}}, model_ref(handoff.get("model")))
 
     def resume(self, handoff, text, model: str | None = None, message_id: str | None = None,
