@@ -663,6 +663,24 @@ class HttpTransport(Watched):
         self.assertIn("Docket did not start this run", self.pm_messages[-1])
         self.assertIn("add a delete button too", self.pm_messages[-1])
 
+    def test_the_end_of_the_work_before_a_queued_instruction_does_not_end_it(self):
+        """Review 2026-11-27 P1-2: the queued instruction is delivered as the earlier work ends; that end is
+        not the new turn's, and the PM is not woken on a half-done run."""
+        self.hand_over()
+        self.world.end("ses_x", "succeeded")  # the earlier work ends...
+        self.clock[0] += 1000
+        self.world.start("ses_x", "build it", "msg_d1")  # ...and OpenCode takes the queued instruction up at once
+        self.docket.on_run_end("ses_x", "succeeded", "earlier work done", session="ses_x")
+        self.assertEqual(self.pm_messages, [])
+        self.assertIsNone(ledger.open_turn(self.db, "ses_x")["ended_at"])
+        self.assertEqual(len(self.events("run-end:before-turn")), 1)
+        # Its own end reaches the PM once.
+        self.clock[0] += 60_000
+        self.world.end("ses_x", "succeeded")
+        self.answers.append(dict(CARD, progress="built"))
+        self.docket.on_run_end("ses_x", "succeeded", "built it", session="ses_x")
+        self.assertEqual(len(self.pm_messages), 1)
+
     def test_an_instruction_from_outside_during_dockets_own_run_is_logged_not_adopted(self):
         self.hand_over()
         self.world.by_id["msg_out"] = {"id": "msg_out", "type": "user", "content": [{"type": "text", "text": "and a rename"}], "metadata": {}}
@@ -691,6 +709,19 @@ class HttpTransport(Watched):
         self.assertEqual(self.pm_messages and "the run's reply" in self.pm_messages[-1], True)
         self.assertEqual(self.db.execute("select count(*) from jobs").fetchone()[0], 0)
         self.assertTrue(self.events("job:resumed"))
+
+    def test_a_restart_with_a_job_in_hand_neither_wakes_the_pm_twice_nor_closes_the_handoff(self):
+        """Review 2026-11-27 P1-1: reconcile ran after resume_jobs as if the job were lost."""
+        ledger.add_job(self.db, "ses_x", "act", ["ses_x", {"action": "hold"}, "words", "note", None, "awaiting"])
+        ledger.set_state(self.db, "ses_x", "pending")
+        self.db.execute("update delegations set updated_at = ? where id = 'ses_x'", (ledger.now() - 9 * 3600_000,))
+        ends = []
+        self.docket.on_run_end = lambda *a, **k: ends.append(a)
+        self.docket.close_overdue()
+        self.docket.reconcile()
+        self.assertEqual(ends, [])
+        self.assertNotEqual(self.row()["state"], "closed")
+        self.assertEqual(self.events("orphaned"), [])
 
 
 class ObserveMode(Watched):

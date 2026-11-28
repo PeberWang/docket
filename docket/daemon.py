@@ -164,6 +164,10 @@ class Docket:
         with self.locks_guard:
             return self.jobs.get(delegation_id, 0) > 0
 
+    def has_job(self, delegation_id: str) -> bool:
+        """A PM job is in hand: running, queued, or in the ledger and about to be resumed after a restart."""
+        return self.busy(delegation_id) or bool(self.db().execute("select 1 from jobs where delegation_id = ? limit 1", (delegation_id,)).fetchone())
+
     def submit(self, delegation_id: str, job, *args):
         """Queue a PM job for a handoff. It is written down first (audit S6): a restart runs it again
         instead of leaving the person's answer counted and never carried out."""
@@ -1677,13 +1681,21 @@ class Docket:
             ledger.log(db, row["id"], "run-end:own-interrupt", {"session": session})
             return
         turn = ledger.open_turn(db, row["id"]) if run_end and event != "question" and row.get("engine") == "opencode" else None
-        if turn and not turn["confirmed_at"] and turn["transport"] == "http" and self.confirm_turn(row, turn) == "queued":
-            # The work before Docket's queued instruction ended; OpenCode takes that instruction up next,
-            # and the PM verifies once it is done (its reply covers both).
-            ledger.log(db, row["id"], "run-end:queued-next", {"turn": turn["id"], "event": event})
-            return
+        confirmed = None
+        if turn and not turn["confirmed_at"] and turn["transport"] == "http":
+            confirmed = self.confirm_turn(row, turn)
+            if confirmed == "queued":
+                # The work before Docket's queued instruction ended; OpenCode takes that instruction up next,
+                # and the PM verifies once it is done (its reply covers both).
+                ledger.log(db, row["id"], "run-end:queued-next", {"turn": turn["id"], "event": event})
+                return
+            if confirmed is True and self.session_busy(session or engines.session_of(row)):
+                # The queued instruction was delivered between the end and now, and its run is under way:
+                # this end was the work before it (review 2026-11-27 P1-2). Its own end comes later.
+                ledger.log(db, row["id"], "run-end:before-turn", {"turn": turn["id"], "event": event})
+                return
         if turn:
-            if not turn["confirmed_at"] and self.confirm_turn(row, turn) is False:
+            if not turn["confirmed_at"] and (confirmed if confirmed is not None else self.confirm_turn(row, turn)) is False:
                 if self.acting:
                     ledger.log(db, row["id"], "turn:stale-end", {"turn": turn["id"], "event": event})
                     return
@@ -2562,6 +2574,14 @@ class Docket:
         elif kind == "permission.asked":
             self.permission_card(row["id"], data if str(data.get("id", "")).startswith("per_") else nested)
 
+    def session_busy(self, session_id: str) -> bool:
+        """Whether OpenCode says the session is at work right now (best effort: unreadable is not busy)."""
+        try:
+            times = Service().session(session_id).get("time") or {}
+        except Exception:
+            return False
+        return (times.get("busy") or 0) > (times.get("idle") or 0)
+
     def on_activity(self, session_id: str):
         """A step or tool call in a session: work is going on, whatever the messages and files say (audit W6)."""
         now = ledger.now()
@@ -2776,6 +2796,8 @@ class Docket:
             if created >= installed and (session.get("title") or "").startswith(prefix):
                 self.maybe_register(session["id"], attempts=1)
         for row in self.db().execute("select * from delegations where state in ('running', 'pending') and engine = 'opencode'").fetchall():
+            if self.has_job(row["id"]):
+                continue  # its PM job was resumed (resume_jobs): it carries the handoff on, a second wake would not
             # A PM job cut off by a restart leaves the handoff pending: put it back where it belongs.
             if row["state"] == "pending" and ledger.open_card(self.db(), row["id"]):
                 ledger.set_state(self.db(), row["id"], "awaiting")
@@ -2810,6 +2832,8 @@ class Docket:
         for row in db.execute(
             "select * from delegations where state = 'pending' and engine = 'opencode' and updated_at < ?", (cutoff,)
         ).fetchall():
+            if self.has_job(row["id"]):
+                continue  # pending because its PM job is about to run again: not overdue (faults never close work)
             hours = (ledger.now() - row["updated_at"]) // 3600_000
             ledger.log(db, row["id"], "orphaned", {"dispatched_at": row["dispatched_at"], "updated_at": row["updated_at"], "hours": hours})
             log.info("reconcile: closing %s, pending for %d hours", row["id"], hours)
