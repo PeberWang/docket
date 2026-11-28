@@ -2,7 +2,8 @@
 # Install OpenClaw Docket for the current user:
 #   - builds Docket.app and copies it to ~/Applications
 #   - writes a default config if there is none
-#   - registers two launchd agents: the service (always on) and the app (at login)
+#   - copies the service's code to ~/Library/Application Support/docket/lib and registers two launchd
+#     agents: the service (always on, run from that copy) and the app (at login)
 #   - wires OpenClaw, if it is present (scripts/openclaw_setup.py): the plugin, the docket-pm agent,
 #     the desk-dispatch skill. A skill or PM file changed by hand is backed up, never lost.
 # Re-running it upgrades in place. Data in ~/Library/Application Support/docket is kept.
@@ -33,43 +34,11 @@ if [ ! -f "$DATA/config.json" ]; then
   say "Wrote $DATA/config.json"
 fi
 
-# launchd starts with a bare PATH: give it the directories of the CLIs Docket calls.
-path="/usr/bin:/bin:/usr/sbin:/sbin"
-for tool in openclaw opencode claude codex node; do
-  if found="$(command -v "$tool" 2>/dev/null)"; then
-    dir="$(dirname "$found")"
-    case ":$path:" in *":$dir:"*) ;; *) path="$dir:$path" ;; esac
-  fi
-done
+# The service runs from a copy of its code in Application Support, never from this clone:
+# launchd's python3 may not read ~/Desktop or ~/Documents (scripts/deploy-service.sh).
+bash "$REPO/scripts/deploy-service.sh" --no-restart
 
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-
-cat > "$AGENTS/$LABEL.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/python3</string>
-    <string>-I</string>
-    <string>$(xml "$REPO/docket/daemon.py")</string>
-  </array>
-  <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key><string>$(xml "$path")</string>
-    <key>PYTHONUNBUFFERED</key><string>1</string>
-  </dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>$(xml "$LOGS/daemon.log")</string>
-  <key>StandardErrorPath</key><string>$(xml "$LOGS/daemon.log")</string>
-</dict>
-</plist>
-EOF
 
 cat > "$AGENTS/$LABEL.app.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
