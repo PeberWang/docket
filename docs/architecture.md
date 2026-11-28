@@ -13,8 +13,8 @@ Seven rules hold everywhere. Each later section points back to them.
 1. **Code keeps watch; the model only judges.** The PM is passive. It is woken by one event, answers with one action, and ends. Following runs, waiting, retrying and timing out are Docket's code, never the PM's loop.
 2. **One writer.** Only Docket sends instructions into a handoff's coding-agent session and only Docket wakes its PM. Everyone else (the person, the main agent, other sessions) passes information to Docket, which decides what reaches the PM.
 3. **The person decides.** Nothing the person did not say is decided on their behalf. Silence is never an answer. An instruction that follows from the person's input quotes their words.
-4. **Late is fine.** A question waits until it is answered, made moot by newer work, settled in the chat, or left unanswered for a day, and each of those leaves a trace.
-5. **Everything is recorded.** Every transition is an event with who did it and why. The ledger is the single source of truth and nothing but the service writes it.
+4. **Late is fine.** A question waits until it is answered, made moot by newer work, settled in the chat, or left unanswered for twelve hours, and each of those leaves a trace.
+5. **Everything is recorded.** Every transition is an event in the ledger, and the ledger is the single source of truth: nothing but the service writes it.
 6. **Faults never close work.** Docket's own failures become cards with a retry. Only the closings in section 6 end a handoff.
 7. **Installing is enough.** The installer wires OpenClaw (plugin, PM agent, skill) and the coding agent. Nobody has to tune prompts by hand afterwards.
 
@@ -49,7 +49,7 @@ Seven rules hold everywhere. Each later section points back to them.
 
 This is the canonical flow. The code is organised around it, and the tests walk it.
 
-1. **Hand off.** The main agent runs `desk-dispatch` with a title, a project directory, a brief and one instruction. The script posts them to Docket (`POST /api/dispatch`) with the session it came from. Docket registers the handoff, creates the coding-agent session itself, and sends the instruction as turn 1. The chat gets one line: "Handed off: …".
+1. **Hand off.** The main agent runs `desk-dispatch` with a title, a project directory, a brief and one instruction. The script posts them to Docket (`POST /api/dispatch`), and Docket finds the dispatching chat in OpenClaw's transcript. Docket registers the handoff, creates the coding-agent session itself, and sends the instruction as turn 1. The chat gets one line: "Handed off: …".
 2. **Run.** The coding agent works on its own. Docket follows the turn (section 5) until the run ends.
 3. **Verify.** The run's end wakes the PM once. The PM reads the result (it may read files and run the project's tests) and answers one action:
    - `relay`: the next instruction, when the brief already settles what comes next;
@@ -79,7 +79,7 @@ A handoff has one **state**, which is what the panel shows, and its current **tu
 | `taken_over` | the person drives the session themselves | hand back |
 | `closed` | ended through a closing in section 6 | a note reopens it |
 
-Invariants. The sweep checks them every minute and logs any breach as an error event:
+Invariants. `docket audit report` checks them (section 10):
 
 1. `awaiting` has exactly one card on show; queued cards exist only behind one on show.
 2. `running` has an open turn; `pending` has a PM job in the ledger's job table.
@@ -95,12 +95,12 @@ Every engine answers the same five questions: how to start a session, how to sen
 
 **OpenCode (HTTP, OpenCode 2.2 and later).** Docket drives the OpenCode service directly:
 
-- **Session.** `POST /api/session` with an id Docket chooses (retries return the same session), the project as `location`, `metadata: {"docket": {"handoff": id}}`, and the title `🦞 <title>`, archived, so the inbox convention still holds. Permissions are a per-handoff ruleset (section 9) instead of `--auto`.
+- **Session.** `POST /api/session` with an id Docket chooses (retries return the same session), the project as `location`, `metadata: {"docket": {"handoff": id}}`, the configured `prefix` and the task as the title, and archived, so an inbox convention holds. OpenCode unarchives a session that takes a prompt, so Docket archives it again after each of its own instructions. Permission requests are decided as in section 9.
 - **Instruction.** `POST /api/session/{id}/prompt` with a message id Docket chooses (the turn), `metadata: {"docket": {"turn": n, "via": …}}`, and `delivery: "queue"` or `"steer"`. Sending the same id again is a no-op, so a resend after a lost connection cannot duplicate work.
 - **Following a turn.** `session.inbox.delivered` for Docket's own message id says the instruction reached the agent; `session.execution.started`, `session.tool.*` and `session.step.*` are activity; `session.execution.succeeded/failed/interrupted` end the run. When the event stream drops, the sweep reads the same facts from `GET /api/session/{id}` and `GET /api/session/{id}/message/{messageID}`.
 - **Writes Docket did not make.** A user message in the session without Docket's metadata is a foreign turn. It is recorded (`turn:foreign`), adopted as the current turn so its end wakes the PM once, and counted in the health summary.
 - **Stopping.** `POST /api/session/{id}/interrupt`.
-- **What changed.** `GET /api/session/{id}/diff` gives the files a turn changed, for the PM and for a resend.
+- **Questions.** When the agent asked with its question tool and waits, the person's answer goes to that question; an instruction sent instead would queue behind it for good.
 
 Docket reads OpenCode's `/openapi.json` at start. An older OpenCode without these routes falls back to `opencode run -s`, with the limits listed in the README.
 
@@ -203,49 +203,51 @@ The PM agent's tool policy allows reading files and running commands (`read`, `e
 
 ## 9. Permissions in the coding agent
 
-Every OpenCode handoff carries a ruleset applied on top of OpenCode's own:
+With [opencode-permission-notify](https://github.com/PeberWang/opencode-permission-notify) installed, it decides every OpenCode permission request before OpenCode publishes it. It sorts the request into six classes (1 irreversible or out of bounds, 2 read outside the project, 3 run in the project, 4 write in the project, 5 read in the project, 6 no side effects) and gives each class the tier the person chose:
 
-- inside the project: allow;
-- outside it: allow reads of ordinary files, ask for writes;
-- always: ask for reads of credentials (`~/.ssh`, `~/.aws`, keychains, `.env*`, OpenClaw and Docket's own state) and for destructive commands.
+- `human`: its popup asks the person;
+- `silent`: allowed and logged;
+- `pm`: handed to Docket's PM, and only in a handoff's session (one Docket opened carries `metadata.docket`). Classes 2 to 4 are allowed and logged, and Docket puts what was allowed during a run to the PM when it verifies the run. Class 1 is held: Docket wakes the PM, which allows, rejects or hands it to the person; anything the risk rules flag goes to the person unless the person's own words asked for it, and a PM that is unsure, fails or takes longer than two minutes leaves it to the popup. In any other session there is no PM, and a `pm` request asks the person.
 
-Questions OpenCode still asks reach the person through the permission popup. They are never silently approved.
+The two sides meet in files under permission-notify's folder: Docket touches a heartbeat (`pm-online`) every ten seconds, reads the decision ledger (`ledger.jsonl`) from where it left off, and answers held requests (`pending/<batch>.json`) with `replies/<batch>.json`. A run waiting on the popup counts as activity, so the watchdog does not take the wait for a stuck run.
+
+Without permission-notify, Docket answers the requests OpenCode publishes itself: inside the project and reads outside it are approved, writes and deletions outside it go to the person. Docket never approves a request over the person's classes when permission-notify is there.
 
 ## 10. Records and audit
 
-Every event carries:
+Docket records, as events in the ledger:
 
-- `actor`: `docket`, `user:panel`, `user:chat`, `main`, `pm`, `opencode`, `watchdog` or `sweep:<name>`;
-- `cause`: the id of the turn, card, job or event that led to it.
-
-Beyond state changes, Docket records:
-
-- turns sent, delivered, running, foreign and ended;
-- every PM wake: why, which job, which attempt and model, how long, and the action it returned;
-- cards shown and resolved, with who resolved them;
+- every state and phase change, with what caused it;
+- turns sent, delivered, running, answered as a question, foreign and ended;
+- every PM wake (its time window, the action it returned, and each unusable reply verbatim);
+- cards queued, superseded, expired and answered, with the answer;
+- permission decisions in a handoff's session, the PM's own decisions and escalations;
 - tool calls the plugin refused, and conclusions it delivered;
 - registration skips, with the exact reason;
 - every closing.
 
-The daily health summary counts:
-
-- stuck turns and those that healed by themselves;
-- what needed the person;
-- PM failures and slow wakes;
-- foreign turns and refused overreach;
-- invariant breaches.
-
-`docket audit` produces the full report from a copy of the ledger, the service log and OpenCode's log; its method is described in the report itself.
+`docket status <handoff>` prints one handoff's phases and latest events. `docket audit report` copies the ledger with SQLite's backup API and writes a full report: how handoffs ended, where cards went, who took part, PM wakes, who sent instructions into handoff sessions, the watchdog, the ledger invariants of section 4, the service log, and what the plugin and the permission classes did. The daily health summary (`health_dir`) counts turns that got stuck, healed by themselves, needed the person, and what the watchdog would have done in observe mode.
 
 ## 11. Installation
 
-`scripts/install.sh` does everything once, idempotently, and prints what it changed:
+`scripts/install.sh` does everything once and can be run again to upgrade:
 
-1. builds Docket.app and copies the service's code into `~/Library/Application Support/docket/lib`, so the clone can move or change without touching the running service;
-2. installs the two launch agents;
-3. installs and enables the OpenClaw plugin with the hook permissions it needs;
-4. creates the `docket-pm` agent with its workspace and tool policy;
-5. installs the skill, backing up any copy the user changed;
-6. detects which coding agents are installed and sets the default.
+1. builds Docket.app into `~/Applications`;
+2. copies the service's code into `~/Library/Application Support/docket/lib` and runs it from there as a launch agent (`scripts/deploy-service.sh`), so the clone can move or change without touching the running service, and launchd's python3 never needs permission to read a clone in `~/Desktop` or `~/Documents`;
+3. links and enables the OpenClaw plugin, with conversation access for its prompt hook, and adds it to `plugins.allow` when that allowlist is set;
+4. creates the `docket-pm` agent with its workspace and tool policy, and sets `pm_agent`;
+5. installs the skill, backing up any copy the user changed.
 
-`docket doctor` checks every link: the Gateway, the plugin, the PM agent, OpenCode's API, the judge key and the launch agents. For each one it prints the fix.
+Steps 3 to 5 are `scripts/openclaw_setup.py`. Every change to `openclaw.json` is one `openclaw config patch`, which OpenClaw validates; `--dry-run` prints it and validates it without writing, and `--remove` undoes the plugin link. `docket doctor` checks every link (the service, the launch agents, OpenCode's API, the plugin, the PM agent, the skill, the judge) and prints the fix for each that fails.
+
+## 12. Not built yet
+
+These were part of the target and are not in the code; they are listed so nothing above is read as promised:
+
+- an `actor` and a `cause` on every event, so each record names who acted and what led to it;
+- events for a card going up on the panel and coming down;
+- the service checking the invariants of section 4 itself every minute (today `docket audit report` checks them);
+- a per-handoff OpenCode permission ruleset set when the session is created;
+- reading what a turn changed from OpenCode's diff API instead of the project's file times;
+- recognising a PM that overreaches in its reply, beyond what the plugin refuses;
+- PM failures, slow wakes and foreign turns in the daily health summary.

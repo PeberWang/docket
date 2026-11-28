@@ -31,7 +31,7 @@ Docket is closer to an in-tray than to a chat. A brief states where things stand
 
 - **Chat → Docket.** The moment the agent hands work off. The chat gets one line ("Handed off: …") and does not bring the work up again.
 - **Docket → coding agent.** After three rounds, or whenever you choose, Docket hands the session to you: OpenCode opens it, and for Claude Code or Codex a Terminal window opens with the resume command. Tasks that need your hands, such as tuning how something feels, should end up here early.
-- **Docket → chat.** When a handoff is closed, a one-sentence conclusion is written to the agent's daily memory. The process moves out of the chat; the result comes back.
+- **Docket → chat.** When a handoff is closed, its one-sentence conclusion comes back into the chat that dispatched it, once, at the start of the agent's next turn, and is written to the agent's daily memory. The process moves out of the chat; the result comes back.
 
 ## The brief
 
@@ -52,12 +52,14 @@ Docket is closer to an in-tray than to a chat. A brief states where things stand
 
 ## The PM
 
-Each handoff gets its own OpenClaw session (`agent:main:docket-<id>`). It is the same agent, with the same memory and tools, but a different session and different rules. It is not running all the time:
+Each handoff gets its own OpenClaw session in a dedicated agent (`agent:docket-pm:<id>`), with its own short workspace and a tool policy that lets it read files and run commands but not send messages, reach other sessions or dispatch work. It never loads the main agent's instructions, which describe an agent that dispatches and follows up. It is not running all the time:
 
 - The service watches the coding agent: the OpenCode event stream, or the exit of a Claude Code or Codex process.
-- When a run ends, it wakes the PM once with `openclaw agent --session-key … --json` (no `--deliver`, so nothing reaches the chat).
+- When a run ends, it wakes the PM once with `openclaw agent --agent docket-pm --session-key … --json` (no `--deliver`, so nothing reaches the chat). The wake repeats the contract (one JSON action, no tools that reach the coding agent, no waiting) and fences text from the coding agent or another session as untrusted.
 - Your decision goes to the PM, which answers with an action: `relay` (the service sends the follow-up), `card` (ask you again), or `close`. Only answering a card is a round; steering with words in the chat, notes and the PM's own relays are free.
 - After a run the PM verifies it and answers the same way: it may relay the next piece itself when your decisions already settle it (no round, at most `continue_limit` times in a row), and any instruction that would push, publish, deploy or reach outside the project waits on a card for your yes.
+
+- A permission request you handed to the PM (with opencode-permission-notify) wakes it too: a reversible one is reviewed when the PM checks the run, an irreversible one waits for its allow, reject or "ask the person".
 
 Code keeps watch; the model only judges.
 
