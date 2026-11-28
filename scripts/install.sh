@@ -56,9 +56,17 @@ cat > "$AGENTS/$LABEL.app.plist" <<EOF
 EOF
 
 say "Starting the service and the app"
+# bootout returns before a job is gone; bootstrapping too early fails with "5: Input/output error".
+restart() {
+  launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    launchctl print "$DOMAIN/$1" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist" 2>/dev/null || { sleep 2; launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist"; }
+}
 for job in "$LABEL" "$LABEL.app"; do
-  launchctl bootout "$DOMAIN/$job" 2>/dev/null || true
-  launchctl bootstrap "$DOMAIN" "$AGENTS/$job.plist"
+  restart "$job"
 done
 
 if [ "${DOCKET_SKIP_OPENCLAW:-0}" != "1" ] && command -v openclaw >/dev/null; then
@@ -73,13 +81,13 @@ cat <<EOF
 OpenClaw Docket is running: the tray icon is in the menu bar, the pill on the right edge (⌥⌘D).
 
 Next:
-  1. Tell OpenClaw to hand off through Docket. Add to ~/.openclaw/workspace/AGENTS.md:
+  1. Add two lines to ~/.openclaw/workspace/AGENTS.md:
        Hand coding work off with the desk-dispatch skill, reply with one line, and leave the rest to Docket.
+       When I say more about a handed-off task, pass my words on with docket note and reply with one line.
   2. Optional, the judge (picks a card's background from the chat). Without it cards still arrive.
      Open Settings → Models and either save a TypeSafe key (https://console.typesafe.ai), or switch
      the backend to an OpenAI-compatible language model and fill in its endpoint, model and key.
-  3. For OpenCode: install the opencode-openclaw-inbox plugin (0.4.0 or later), which provides
-     opencode-dispatch and opens sessions for Docket.
+  3. Check every link: $REPO/scripts/docket doctor
 
 Settings: $DATA/config.json    Logs: $LOGS/daemon.log
 EOF

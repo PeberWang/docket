@@ -67,8 +67,9 @@ state locally at once, then refreshes.
 
 `POST /api/delegations/<id>/note` body `{"text": "…", "source": "panel"}` →
 `202 {"ok": true, "id": "ses_…", "rounds": 2}`. Pass a word on to the PM ("转达一句"): the daemon
-logs it, spends a round, answers the PM's own card if one is up, wakes the PM and carries out its
-action. A closed handoff opens again; taken over or at the limit is 409. `docket note` uses the same.
+logs it, wakes the PM and carries out its action. It costs no round; only when the PM says the words
+answer the card on show is that card answered, and that answer is the round (`rounds` is the count
+so far). A closed handoff opens again; taken over or at the limit is 409. `docket note` uses the same.
 
 A card with `stalled` or `docket_fault` must never look like normal progress: the badge says
 "Stuck" / "Docket fault" in orange. `phase` awaiting_dispatch or dispatching shows "Handing it to
