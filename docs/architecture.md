@@ -250,4 +250,10 @@ These were part of the target and are not in the code; they are listed so nothin
 - a per-handoff OpenCode permission ruleset set when the session is created;
 - reading what a turn changed from OpenCode's diff API instead of the project's file times;
 - recognising a PM that overreaches in its reply, beyond what the plugin refuses;
-- PM failures, slow wakes and foreign turns in the daily health summary.
+- PM failures, slow wakes and foreign turns in the daily health summary;
+- the plugin and the `docket` command deployed next to the service's code; today the Gateway loads the plugin from the clone, so a branch switched in the clone changes the live plugin;
+- one queue per handoff for PM jobs instead of workers waiting on a per-handoff lock (three workers can be held by one busy handoff);
+- the newest of several merged run ends kept in the ledger, not only in memory;
+- spending a round on a permission card only once the answer reached OpenCode;
+- with `--supersedes`, starting the new handoff before the old one closes on the opencode-dispatch path;
+- protecting Docket's own token and API from agents that can run commands: any agent that can read `daemon.json` can call the API as the panel does.

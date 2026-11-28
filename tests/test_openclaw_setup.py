@@ -64,6 +64,13 @@ class OpenClawSetup(unittest.TestCase):
         self.assertNotIn("allow", self.setup().patch({})["plugins"])
         self.assertEqual(set(self.setup(plugin=False).patch({})), {"agents"})
 
+    def test_a_reinstall_keeps_the_persons_own_choices(self):
+        config = {"plugins": {"entries": {"docket": {"enabled": False}}},
+                  "agents": {"entries": {"docket-pm": {"tools": {"allow": ["read"]}}}}}
+        patch = self.setup().patch(config)
+        self.assertNotIn("enabled", patch["plugins"]["entries"]["docket"])
+        self.assertNotIn("tools", patch["agents"]["entries"]["docket-pm"])
+
     def test_a_dry_run_changes_nothing_and_validates_the_patch(self):
         before = (self.data / "config.json").read_text()
         setup = self.setup(dry_run=True)

@@ -18,6 +18,12 @@ LOGS="$HOME/Library/Logs/docket"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$(id -u)"
 
+# Never from a git worktree: work in progress would replace the running service.
+if [ "$(git -C "$REPO" rev-parse --git-dir 2>/dev/null)" != "$(git -C "$REPO" rev-parse --git-common-dir 2>/dev/null)" ] && [ "${DOCKET_ALLOW_WORKTREE:-0}" != "1" ]; then
+  echo "deploy-service: $REPO is a git worktree; deploy from the main checkout (or set DOCKET_ALLOW_WORKTREE=1)" >&2
+  exit 1
+fi
+
 mkdir -p "$LIB" "$LOGS" "$(dirname "$PLIST")"
 for package in docket judge; do
   rsync -a --delete --exclude "__pycache__" "$REPO/$package/" "$LIB/$package/"

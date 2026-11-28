@@ -170,7 +170,8 @@ Used daily by its author with OpenCode. Known limits:
 
 - macOS only. The transcript reader reads OpenClaw 2026.9.x and 2026.11.x; after upgrading OpenClaw, run `scripts/docket doctor` and `/usr/bin/python3 -I scripts/selfcheck.py`.
 - The Claude Code path is tested end to end; the Codex path follows the official CLI docs but has not been run yet.
-- The OpenClaw plugin API is experimental upstream; the plugin is tested against 2026.11.6.
+- The OpenClaw plugin API is experimental upstream; the plugin is tested against 2026.11.6, and the Gateway loads it from the clone.
+- The service's token is in a file any local process of yours can read, including an agent that runs commands; Docket assumes the agents on your machine act for you. Section 12 of docs/architecture.md lists this and the other things not built yet.
 - The round limit is fixed at 3. The panel docks to the main screen.
 
 Development: `/usr/bin/python3 -I -m unittest discover -s tests -p 'test_*.py'` runs the service's tests and the plugin's (`node --test`); `bash app/build.sh` builds the app (with Command Line Tools only, `ld` warns that two search paths under `/Library/Developer/CommandLineTools/Developer` are not found, which is harmless); `app/dev-daemon.py` is a fake service for UI work; `eval/` holds the judge's evaluation harness, which needs your own data. Changes are in [CHANGELOG.md](CHANGELOG.md).

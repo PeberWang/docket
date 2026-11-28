@@ -89,7 +89,11 @@ class Setup:
         """The one config patch: objects merge, arrays replace, so plugins.allow is written whole."""
         out: dict = {}
         if self.plugin:
-            plugins: dict = {"entries": {PLUGIN_ID: {"enabled": True, "hooks": {"allowConversationAccess": True}}}}
+            existing = ((config.get("plugins") or {}).get("entries") or {}).get(PLUGIN_ID)
+            # A re-install leaves the person's own choices alone: a plugin they turned off stays off.
+            entry = {"hooks": {"allowConversationAccess": True}} if isinstance(existing, dict) and existing.get("enabled") is False \
+                else {"enabled": True, "hooks": {"allowConversationAccess": True}}
+            plugins: dict = {"entries": {PLUGIN_ID: entry}}
             paths = ((config.get("plugins") or {}).get("load") or {}).get("paths")
             paths = paths if isinstance(paths, list) else []
             if str(PLUGIN) not in paths:
@@ -102,6 +106,9 @@ class Setup:
             agent = json.loads((PM_AGENT / "agent.json").read_text(encoding="utf-8"))
             agent.pop("//", None)
             agent["workspace"] = str(self.workspace)
+            existing = ((config.get("agents") or {}).get("entries") or {}).get(AGENT_ID)
+            if isinstance(existing, dict) and existing.get("tools"):
+                agent.pop("tools")  # a tool policy already there (maybe edited by the person) is kept
             out["agents"] = {"entries": {AGENT_ID: agent}}
         return out
 
