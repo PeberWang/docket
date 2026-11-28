@@ -124,6 +124,15 @@ class Permissions(unittest.TestCase):
         self.assertEqual(answered, [])
         self.assertEqual(self.events("permission:ask")[0]["reason"], "permission-notify decides")
 
+    def test_answering_the_agents_question_counts_as_the_run_going_on(self):
+        engines.OpenCode.resume = lambda engine, handoff, text, model=None, **kw: {"message": None, "transport": "form", "forms": ["frm_1"]}
+        self.docket.settings["engines"] = {"opencode": {"transport": "http"}}
+        turn = self.docket.send("ses_x", "中文", via="decision")
+        row = self.db.execute("select confirmed_at, transport from turns where id = ?", (turn,)).fetchone()
+        self.assertIsNotNone(row[0])
+        self.assertEqual(row[1], "form")
+        self.assertEqual(self.events("turn:answered-question")[0]["forms"], ["frm_1"])
+
     def test_without_delegated_requests_the_wake_is_unchanged(self):
         self.docket.track("ses_x", "ses_x", "build it", "dispatch")
         self.docket.write_card("ses_x", "succeeded", "done")
@@ -163,6 +172,51 @@ class InboxConvention(unittest.TestCase):
         engine.open_session({"id": "ses_x", "directory": None}, "list view")
         engine.open_session({"id": "ses_y", "directory": None}, "🦞 already")
         self.assertEqual([m[1] for m in made], ["🦞 list view", "🦞 already"])
+
+
+
+class AgentQuestions(unittest.TestCase):
+    """The agent asked with its question tool and waits: the person's answer goes to that question,
+    not into an instruction queued behind it forever (seen on 2026-11-27, six minutes stuck)."""
+
+    FORM = {"id": "frm_1", "fields": [{"key": "q0", "type": "string", "options": [{"value": "中文"}], "custom": True}]}
+
+    def service(self, forms):
+        from docket import opencode
+
+        calls = []
+        service = opencode.Service.__new__(opencode.Service)
+
+        def request(method, path, body=None, timeout=30):
+            calls.append((method, path, body))
+            return {"data": forms if path.endswith("/form") else {"id": "msg_1"}}
+
+        service._request = request
+        service.get = lambda path: request("GET", path)
+        return service, calls
+
+    def test_free_text_questions_are_answered_and_others_withdrawn(self):
+        service, calls = self.service([self.FORM])
+        self.assertTrue(service.answer_forms("ses_x", [self.FORM], "中文，并带上日期"))
+        self.assertEqual(calls[-1], ("POST", "/api/session/ses_x/form/frm_1/reply", {"answer": {"q0": "中文，并带上日期"}}))
+        closed = {"id": "frm_2", "fields": [{"key": "ok", "type": "boolean"}]}
+        self.assertFalse(service.answer_forms("ses_x", [closed], "yes"))
+        self.assertEqual(calls[-1][:2], ("DELETE", "/api/session/ses_x/form/frm_2"))
+
+    def test_an_instruction_to_a_waiting_agent_answers_its_question(self):
+        service, calls = self.service([self.FORM])
+        real = engines.Service
+        engines.Service = lambda: service
+        self.addCleanup(setattr, engines, "Service", real)
+        engine = engines.OpenCode({"engines": {"opencode": {"transport": "http"}}})
+        run = engine.resume({"id": "ses_x", "engine_session": "ses_x"}, "中文", message_id="msg_d", metadata={"docket": {}})
+        self.assertEqual((run["transport"], run["message"]), ("form", None))
+        self.assertFalse(any(path.endswith("/prompt") for _, path, _ in calls))  # no instruction queued behind it
+        service, calls = self.service([])
+        engines.Service = lambda: service
+        run = engine.resume({"id": "ses_x", "engine_session": "ses_x"}, "go on", message_id="msg_d", metadata={"docket": {}})
+        self.assertEqual(run["transport"], "http")
+        self.assertTrue(any(path.endswith("/prompt") for _, path, _ in calls))
 
 
 if __name__ == "__main__":

@@ -123,7 +123,12 @@ class OpenCode(Engine):
         a request that returned nor a process that started says the work started."""
         session = session_of(handoff)
         if self.over_http(model):
-            item = Service().prompt(session, text, message_id, metadata, delivery)
+            service = Service()
+            forms = service.forms(session)
+            # The agent asked a question and waits on it: the instruction is its answer.
+            if forms and service.answer_forms(session, forms, text):
+                return {"message": None, "transport": "form", "forms": [f.get("id") for f in forms]}
+            item = service.prompt(session, text, message_id, metadata, delivery)
             return {"message": item.get("id") or message_id, "transport": "http"}
         # `opencode run -s <unknown id>` would start a brand-new session: make sure it exists.
         Service().session(session)

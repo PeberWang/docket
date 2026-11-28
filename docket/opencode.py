@@ -177,6 +177,33 @@ class Service:
         except Exception:
             return False
 
+    def forms(self, session_id: str) -> list:
+        """Questions the agent asked in the session (its question tool) that nobody answered yet."""
+        result = self.get(f"/api/session/{session_id}/form")
+        items = result.get("data", result) if isinstance(result, dict) else result
+        return items if isinstance(items, list) else []
+
+    def answer_forms(self, session_id: str, forms: list, text: str) -> bool:
+        """Answer the agent's open questions with the person's decision, as the PM worded it. The run is
+        waiting on them: an instruction sent instead would queue behind them for good (seen 2026-11-27).
+        A question whose fields cannot take free text is withdrawn instead, so the run goes on and the
+        instruction reaches it. True when every question was answered."""
+        answered = True
+        for form in forms:
+            answer = {}
+            for field in form.get("fields") or []:
+                if field.get("type") == "string" and (field.get("custom") or not field.get("options")):
+                    answer[field["key"]] = text
+                else:
+                    answer = None
+                    break
+            if answer:
+                self._request("POST", f"/api/session/{session_id}/form/{form['id']}/reply", {"answer": answer})
+            else:
+                self._request("DELETE", f"/api/session/{session_id}/form/{form['id']}", None)
+                answered = False
+        return answered
+
     def interrupt(self, session_id: str) -> bool:
         """Stop the session's agent; False when nothing was running."""
         result = self._request("POST", f"/api/session/{session_id}/interrupt", {})

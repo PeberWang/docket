@@ -664,6 +664,10 @@ class Docket:
         else:
             turn = self.track(delegation_id, session, message, via, attempt=attempt, parent=parent, run=run)
         ledger.set_state(db, delegation_id, "running")
+        if not error and run.get("transport") == "form":
+            # Answering the agent's own question resumes the run it is in: the work is going on.
+            ledger.log(db, delegation_id, "turn:answered-question", {"turn": turn, "forms": run.get("forms")})
+            self.mark_running(delegation_id, db.execute("select * from turns where id = ?", (turn,)).fetchone(), "question answered")
         return turn
 
     def continuation_title(self, row: dict) -> str:
