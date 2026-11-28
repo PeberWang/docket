@@ -108,6 +108,22 @@ class Flows(unittest.TestCase):
             self.docket.note("ses_x", "还是按名字吧", "agent:main:main")
         self.assertEqual(self.rounds(), 1)
 
+    def test_words_settle_only_the_card_the_pm_was_shown(self):
+        """Review 2026-11-27 P1-3: a card that took the shown one's place meanwhile is not the person's to have answered."""
+        shown = self.awaiting_card()
+        ledger.resolve_card(self.db, shown, {"action": "answered"})
+        ledger.add_card(self.db, "ses_x", "question", dict(CARD, kind="question", progress="a newer question"))
+        self.assertFalse(self.docket.words_settle_card("ses_x", "按时间排", None, shown))
+        self.assertEqual(self.rounds(), 0)
+        self.assertTrue(self.db.execute("select 1 from events where kind = 'settle:moved-on'").fetchone())
+
+    def test_one_chat_message_answers_a_card_once_whichever_path_comes_first(self):
+        """Review 2026-11-27 P1-4: the unanswered-card sweep took the message; the same words as a note cost nothing more."""
+        card = self.awaiting_card()
+        ledger.log(self.db, "ses_x", "chat:paid", {"chat": "CHAT:10", "via": "stale"})
+        self.assertTrue(self.docket.words_settle_card("ses_x", "按时间排", "CHAT:10", card))
+        self.assertEqual(self.rounds(), 0)
+
     def test_a_chat_mention_the_pm_holds_costs_nothing(self):
         card = self.awaiting_card()
         self.answers.append({"action": "hold", "note": "background for the next piece"})

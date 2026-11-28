@@ -1195,7 +1195,8 @@ class Docket:
         was = row["state"]
         ledger.set_state(db, row["id"], "pending", force=True)  # a note opens a closed handoff again
         shown = body if card is not None and self.answerable(card) else None
-        self.submit(row["id"], self.act, row["id"], pm.note_wake(text, source, rounds, shown), text, "note", None, was)
+        self.submit(row["id"], self.act, row["id"], pm.note_wake(text, source, rounds, shown), text, "note", chat, was,
+                    card["id"] if shown else None)
         return {"id": row["id"], "rounds": rounds}
 
     def claim_chat_message(self, source: str | None) -> str | None:
@@ -1442,6 +1443,8 @@ class Docket:
                 return None
             if ledger.spend_round(db, delegation_id, card["id"], resolution) is None:
                 return None
+            # The same words passed on with docket note later must not answer (and pay for) a card again.
+            ledger.log(db, delegation_id, "chat:paid", {"chat": f"{quote['session']}:{quote['seq']}", "via": "stale"})
         elif not ledger.resolve_open(db, card["id"], resolution):
             return None
         ledger.log(db, delegation_id, f"stale:{verdict['status']}", {"card": card["id"], "seq": quote["seq"], "choices": verdict["choices"], "probability": resolution["probability"]})
@@ -1689,7 +1692,7 @@ class Docket:
                 # and the PM verifies once it is done (its reply covers both).
                 ledger.log(db, row["id"], "run-end:queued-next", {"turn": turn["id"], "event": event})
                 return
-            if confirmed is True and self.session_busy(session or engines.session_of(row)):
+            if confirmed is True and self.opencode_busy(session or engines.session_of(row)):
                 # The queued instruction was delivered between the end and now, and its run is under way:
                 # this end was the work before it (review 2026-11-27 P1-2). Its own end comes later.
                 ledger.log(db, row["id"], "run-end:before-turn", {"turn": turn["id"], "event": event})
@@ -1935,7 +1938,7 @@ class Docket:
         self.decide(card_id, resolution.get("choices") or {}, resolution.get("reply") or "", replay=True)
 
     def act(self, delegation_id: str, message: str, said: str | None = None, via: str | None = None, chat: str | None = None,
-            was: str | None = None):
+            was: str | None = None, shown_card: int | None = None):
         """Wake the PM and carry out its action.
 
         `said` holds the person's own words behind this wake (a card's answer, a note, a chat
@@ -1960,7 +1963,7 @@ class Docket:
             ledger.log(self.db(), delegation_id, "pm:dropped", {"action": kind, "state": now})
             return
         if via in ("mention", "note") and kind != "hold" and action.get("settles_card"):
-            self.words_settle_card(delegation_id, said, chat)
+            self.words_settle_card(delegation_id, said, chat, shown_card)
         self.carry_out(delegation_id, action, via, said)
         if kind == "hold" and was and self.delegation(delegation_id)["state"] == "pending":
             # Only the wake needed "pending": the person said something for the record and nothing follows.
@@ -1975,12 +1978,16 @@ class Docket:
         body = json.loads(card["body"])
         return not (body.get("pending_permission") or body.get("pending_relay") or body.get("docket_fault"))
 
-    def words_settle_card(self, delegation_id: str, said: str | None, chat: str | None = None) -> bool:
+    def words_settle_card(self, delegation_id: str, said: str | None, chat: str | None = None, shown_card: int | None = None) -> bool:
         """The person's words answered the card on the panel: that is the round (2026-11-27). False when
-        there was no card to answer, or it was answered on the panel in the same moment."""
+        there was no card to answer, or it was answered on the panel in the same moment. Only the card
+        the PM was shown can be settled: one that took its place meanwhile the person has not seen."""
         db = self.db()
         card = ledger.open_card(db, delegation_id)
         if not self.answerable(card):
+            return False
+        if shown_card is not None and card["id"] != shown_card:
+            ledger.log(db, delegation_id, "settle:moved-on", {"shown": shown_card, "now": card["id"]})
             return False
         if chat and self.paid_for(delegation_id, chat):  # the same message already answered it through another path
             ledger.log(db, delegation_id, "mention:paid", {"chat": chat})
@@ -2527,7 +2534,8 @@ class Docket:
         up = json.loads(card["body"]) if self.answerable(card) else None
         chat = f"{session_id}:{message.seq}" if session_id else None
         ledger.log(self.db(), delegation_id, "mention", {"seq": message.seq, "chat": chat, "card": card["id"] if up else None})
-        self.submit(delegation_id, self.act, delegation_id, pm.mention_wake(message.text, row["rounds"], up), message.text, "mention", chat)
+        self.submit(delegation_id, self.act, delegation_id, pm.mention_wake(message.text, row["rounds"], up), message.text, "mention", chat,
+                    None, card["id"] if up else None)
 
     # ---------- OpenCode events ----------
 
@@ -2574,7 +2582,7 @@ class Docket:
         elif kind == "permission.asked":
             self.permission_card(row["id"], data if str(data.get("id", "")).startswith("per_") else nested)
 
-    def session_busy(self, session_id: str) -> bool:
+    def opencode_busy(self, session_id: str) -> bool:
         """Whether OpenCode says the session is at work right now (best effort: unreadable is not busy)."""
         try:
             times = Service().session(session_id).get("time") or {}
