@@ -203,11 +203,12 @@ The PM agent's tool policy allows reading files and running commands (`read`, `e
 
 ## 9. Permissions in the coding agent
 
-With [opencode-permission-notify](https://github.com/PeberWang/opencode-permission-notify) installed, it decides every OpenCode permission request before OpenCode publishes it. It sorts the request into six classes (1 irreversible or out of bounds, 2 read outside the project, 3 run in the project, 4 write in the project, 5 read in the project, 6 no side effects) and gives each class the tier the person chose:
+With [opencode-permission-notify](https://github.com/PeberWang/opencode-permission-notify) installed, it decides every OpenCode permission request before OpenCode publishes it, in two layers that never mix:
 
-- `human`: its popup asks the person;
-- `silent`: allowed and logged;
-- `pm`: handed to Docket's PM, and only in a handoff's session (one Docket opened carries `metadata.docket`). Classes 2 to 4 are allowed and logged, and Docket puts what was allowed during a run to the PM when it verifies the run. Class 1 is held: Docket wakes the PM, which allows, rejects or hands it to the person; anything the risk rules flag goes to the person unless the person's own words asked for it, and a PM that is unsure, fails or takes longer than two minutes leaves it to the popup. In any other session there is no PM, and a `pm` request asks the person.
+- **The person's own sessions** follow only the coding agent's own rules (OpenCode's `permission` configuration and its defaults): what it allows goes through, what it asks about waits on the popup, what it denies is denied. Nothing set for the PM changes this.
+- **A handoff's session** (one Docket opened, which carries `metadata.docket`) follows what the person set for the PM, per class (1 irreversible or out of bounds, 2 read outside the project, 3 run in the project, 4 write in the project, 5 read in the project, 6 no side effects): the same as the agent (the default), ask the person, allow, or `pm`. With `pm`, classes 2 to 4 are allowed and logged, and Docket puts what was allowed during a run to the PM when it verifies the run; class 1 is held: Docket wakes the PM, which allows, rejects or hands it to the person. Anything the risk rules flag goes to the person unless their own words asked for it, and a PM that is unsure, fails or takes longer than two minutes leaves it to the popup.
+
+The coding agent's deny rules hold in both layers. The permissions window (from Docket's menu) shows the agent's own rule for each class, read from OpenCode's configuration, next to the person's choice for the PM, and opens only once.
 
 The two sides meet in files under permission-notify's folder: Docket touches a heartbeat (`pm-online`) every ten seconds, reads the decision ledger (`ledger.jsonl`) from where it left off, and answers held requests (`pending/<batch>.json`) with `replies/<batch>.json`. A run waiting on the popup counts as activity, so the watchdog does not take the wait for a stuck run.
 

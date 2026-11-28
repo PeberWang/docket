@@ -33,7 +33,7 @@ The fixes followed from a few product decisions, each taken by the person after 
 - **A round is the person answering a card, and nothing else.** Passing words on, the PM moving the work on and retries became free. The budget now measures decisions, not activity.
 - **Old cards go when they are moot, not when a timer says so.** A newer question replaces an older one; an unanswered card expires after twelve hours with a note; a card is never closed because a run ended.
 - **No confirmation for the person's own words.** If the main agent passes words on, or the judge finds them in the chat, the PM acts on them. Only acts that reach beyond the project, such as pushing, publishing or deleting outside it, wait for an explicit yes.
-- **Permissions in two steps.** The person sorts permission requests into classes and decides, per class, whether to be asked, to let it through, or to hand it to the PM. Reversible requests handed to the PM are allowed and reviewed afterwards; irreversible ones are held until the PM decides and come back to the person when it is unsure.
+- **Permissions in two layers.** The coding agent's own rules govern the person's own sessions and are never changed by Docket; for handoffs, the person decides per class of request what happens when the PM works with the coding agent for them. Reversible requests handed to the PM are allowed and reviewed afterwards; irreversible ones are held until the PM decides and come back to the person when it is unsure.
 - **Observe before acting.** The new watchdog first only recorded what it would have done, so its rules could be checked against real runs before it was allowed to resend anything.
 
 ## Building and checking it

@@ -52,6 +52,10 @@ enum PermissionSettingsLauncher {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
+        // The window shows in the Dock while it is open: with Docket's icon, not a bare program's.
+        if let icon = Bundle.main.path(forResource: "Docket", ofType: "icns") {
+            process.arguments = ["--icon", icon]
+        }
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

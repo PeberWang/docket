@@ -55,7 +55,7 @@ After a run the PM verifies the delivery itself (it reads the files and runs the
 - **Old cards go.** A newer question replaces an older one, news never stands in front of a decision, and a card nobody answers closes the handoff after 12 hours with a note. A card is never closed just because a run ended.
 - **No "did you mean this?" cards.** When the main agent passes your words on, or the judge finds them in the chat, the PM acts on them.
 - **Risky acts wait for your yes.** An instruction that would push, publish, deploy, delete outside the project, run a script from the network or change the system goes on a card first, unless your own words asked for exactly that.
-- **Permissions in two steps** (with [opencode-permission-notify](https://github.com/PeberWang/opencode-permission-notify)). It sorts every OpenCode permission request into six classes, and you choose, per class, to be asked, to let it through, or to hand it to Docket's PM. Handed to the PM, a reversible request goes through and the PM reviews it when it checks the run; an irreversible one is held until the PM decides, and comes to you when the PM is unsure. In a session that is not a handoff there is no PM, and you are asked.
+- **Permissions in two layers** (with [opencode-permission-notify](https://github.com/PeberWang/opencode-permission-notify)). When you use the coding agent yourself, only its own rules apply; nothing here changes them. The permissions window shows those rules for each of six classes of request, and next to each one you set what happens when Docket's PM works with the coding agent for you: the same as the agent, ask me, allow, or hand it to the PM. Handed to the PM, a reversible request goes through and the PM reviews it when it checks the run; an irreversible one waits until the PM decides, and comes to you when the PM is unsure. The agent's own deny rules always hold.
 
 ### One writer, and a record of everything
 
@@ -190,7 +190,7 @@ Development: `/usr/bin/python3 -I -m unittest discover -s tests -p 'test_*.py'` 
 
 **每件交办一个 PM。** 它不是循环，也不轮询：代码盯着，模型只做判断。这一轮结束、你答了卡、或你又说了相关的话，它才醒一次，每次只回一个动作（续派、出卡、结案、暂存），案头在代码里校验后执行。跑完一轮它自己核实交付，最多连续自己往下推五次，再停下来给你看进展。
 
-**注意力是预算。** 一轮就是你答一张卡，转达原话、PM 自己续派、重试、接管都不算；三轮用完，PM 写好交接说明，由你结案或自己接着做。旧卡被取代就撤，12 小时没人答就带说明结案，不会因为「跑完了」就关掉你的卡。不出「这句话你是不是这个意思」的确认卡。推送、发布、部署、删项目外的文件、跑网上的脚本、动系统设置，一律先等你点头，除非你的原话正是要这么做。配合 opencode-permission-notify，权限分两步：它把 OpenCode 的每个授权请求归成六类，你按类选「问我」「放行」或「交给案头 PM」；交给 PM 的，可撤回的先放行、由 PM 在核实时复核，不可逆的先停下、由 PM 判断，拿不准再问你；不是案头交办的会话里没有 PM，照样问你。
+**注意力是预算。** 一轮就是你答一张卡，转达原话、PM 自己续派、重试、接管都不算；三轮用完，PM 写好交接说明，由你结案或自己接着做。旧卡被取代就撤，12 小时没人答就带说明结案，不会因为「跑完了」就关掉你的卡。不出「这句话你是不是这个意思」的确认卡。推送、发布、部署、删项目外的文件、跑网上的脚本、动系统设置，一律先等你点头，除非你的原话正是要这么做。配合 opencode-permission-notify，权限分两层：你自己直接用编程代理时，只照它自己的规则，案头不改动这一层；权限窗口把编程代理对六类请求各自的规则列出来，你在旁边为每一类设定「PM 代你和编程代理交互时」怎么办：同编程代理、问我、放行，或交给 PM。交给 PM 的，可撤回的先放行、由 PM 在核实时复核，不可逆的先停下、由 PM 判断，拿不准再问你。编程代理自己的拒绝规则始终有效。
 
 **只有案头能写，每一步都有记录。** 只有案头能给编程代理派活、能叫醒 PM；别处想补一句，用 `docket note <交办> "<原话>"` 或卡片上的「转达一句」。OpenClaw 插件守着这条线：拦下直接往交办会话里写的命令并告诉对方该用哪条命令，给主代理一份在办清单，把结论送回派活的那段聊天，只送一次；它判断不了时一律放行，不会卡住 OpenClaw。每次状态变化、指令、PM 唤醒、卡片、授权判定和拦截都记进台账；`docket status`、`docket audit report` 和每日健康摘要都从这里来。
 

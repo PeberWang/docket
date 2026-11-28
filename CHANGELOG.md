@@ -24,7 +24,7 @@ This release makes Docket hold together under daily use: one lifecycle per hando
 
 ### Permissions
 
-- With opencode-permission-notify, the person chooses per permission class to be asked, to let it through, or to hand it to the PM. Handed to the PM, reversible requests are allowed and reviewed when the PM checks the run; irreversible ones are held until the PM allows or rejects them, and go to the person when it is unsure, late or the risk rules flag them. Docket keeps a heartbeat so permission-notify knows it is there, and never approves over the person's classes.
+- With opencode-permission-notify, permissions come in two layers that never mix: the person's own sessions follow only the coding agent's own rules, and for a handoff the person chooses per class what happens when the PM works with the coding agent for them (the same as the agent, ask me, allow, or the PM). Handed to the PM, reversible requests are allowed and reviewed when the PM checks the run; irreversible ones are held until the PM allows or rejects them, and go to the person when it is unsure, late or the risk rules flag them. The permissions window shows the agent's own rule for each class next to the PM's, and opens only once. Docket keeps a heartbeat so permission-notify knows it is there, and never approves over the person's classes.
 - Without permission-notify, Docket never approves reading credentials (SSH and cloud keys, `.env` files, keychains, OpenClaw's and Docket's own state) or running a command the risk rules flag.
 - The risk gate needs every kind of risk in an instruction to have been asked for, does not take "don't push" for asking, and never takes words the judge found in a chat as the person's yes.
 

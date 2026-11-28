@@ -59,7 +59,7 @@ Each handoff gets its own OpenClaw session in a dedicated agent (`agent:docket-p
 - Your decision goes to the PM, which answers with an action: `relay` (the service sends the follow-up), `card` (ask you again), or `close`. Only answering a card is a round; steering with words in the chat, notes and the PM's own relays are free.
 - After a run the PM verifies it and answers the same way: it may relay the next piece itself when your decisions already settle it (no round, at most `continue_limit` times in a row), and any instruction that would push, publish, deploy or reach outside the project waits on a card for your yes.
 
-- A permission request you handed to the PM (with opencode-permission-notify) wakes it too: a reversible one is reviewed when the PM checks the run, an irreversible one waits for its allow, reject or "ask the person".
+- A permission request you handed to the PM (with opencode-permission-notify) wakes it too: a reversible one is reviewed when the PM checks the run, an irreversible one waits for its allow, reject or "ask the person". This applies only to the sessions Docket runs for you; when you use the coding agent yourself, its own rules apply and nothing in Docket changes them.
 
 Code keeps watch; the model only judges.
 
