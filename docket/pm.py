@@ -188,6 +188,7 @@ def permission_wake(batch: dict) -> str:
         "- reject: it is not part of the task, or could lose work or data the person did not ask to lose;",
         "- ask: you are not sure. The person is then asked in their popup. When in doubt, ask.",
         "Do not wait or run anything to find out; decide from what you know. A long answer leaves the decision to the person.",
+        f"Write the reason in {_language()}: it is kept where the person can read why.",
         "",
         'Reply with one JSON object: {"decision": "allow" | "reject" | "ask", "reason": "one short sentence"}',
     ])

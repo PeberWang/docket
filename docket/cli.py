@@ -5,6 +5,7 @@
                                      the OpenCode session and when it last said something
     docket list                      the handoffs still open, with their ids
     docket doctor                    every link Docket depends on, and the fix for each that fails
+    docket audit report|timeline     a read-only report from a copy of the ledger and the logs (docket audit --help)
 
 <handoff> is the id (ses_…) or any unique prefix of it, with or without ses_.
 Only the docket writes to OpenCode and wakes PMs: `note` goes through the running service,
@@ -174,6 +175,10 @@ def main(argv=None):
         print(__doc__.strip())
         return
     command, rest = args[0], args[1:]
+    if command == "audit":
+        from docket import audit
+
+        return audit.main(rest)
     if command == "note" and len(rest) >= 2:
         print(note(rest[0], " ".join(rest[1:]), source))
     elif command == "status" and len(rest) == 1:
@@ -187,7 +192,7 @@ def main(argv=None):
         print(text)
         sys.exit(code)
     else:
-        fail('usage: docket note <handoff> "<text>" [--from <who>] | docket status <handoff> | docket list | docket doctor', 2)
+        fail('usage: docket note <handoff> "<text>" [--from <who>] | docket status <handoff> | docket list | docket doctor | docket audit report', 2)
 
 
 if __name__ == "__main__":
