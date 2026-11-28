@@ -98,7 +98,7 @@ Shorter is not the problem; deciding what needs you is. The PM keeps a running r
                   OpenCode (HTTP and events) · Claude Code / Codex (CLI)
 ```
 
-The design and its reasons are in [docs/design.md](docs/design.md); the parts, the state machine, the closings and the integration in [docs/architecture.md](docs/architecture.md).
+The design and its reasons are in [docs/design.md](docs/design.md); the parts, the state machine, the closings and the integration in [docs/architecture.md](docs/architecture.md). How version 0.2 was made stable from ten days of its own records is in [docs/case-study.md](docs/case-study.md).
 
 ## Installation
 
