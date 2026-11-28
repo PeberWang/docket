@@ -120,7 +120,7 @@ The design and its reasons are in [docs/design.md](docs/design.md); the parts, t
 
 Then add the two lines to `AGENTS.md` from the quick start, and optionally save a judge key in Settings → Models (it goes to the keychain).
 
-`bash scripts/uninstall.sh` removes the launch agents, the app, the skill and the plugin link, keeps the PM agent and your handoff history (it prints where and how to delete them), and `--purge` deletes the history too.
+`bash scripts/uninstall.sh` removes the launch agents, the app, the skill and the plugin link, and keeps the PM agent and your handoff history; `--purge` deletes both.
 
 ## Daily use
 

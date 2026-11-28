@@ -59,6 +59,12 @@ LIVE = ("running", "pending", "awaiting")
 TERMINAL_OUTCOMES = ("succeeded", "failed", "interrupted")
 # OpenCode permission actions and tool names, sorted by whether they can change files.
 READ_ACTIONS = {"read", "glob", "grep", "list"}
+# Reading these is never approved on the person's behalf: what is read reaches the model, as good as sent.
+CREDENTIALS = re.compile(
+    r"(^|/)(\.ssh|\.gnupg|\.aws|\.netrc|\.config/gh|Library/Keychains|\.openclaw|Library/Application Support/docket)(/|$)"
+    r"|(^|/)\.env(\.[^/]*)?$|(^|/)id_(rsa|ed25519|ecdsa)[^/]*$|\.(pem|p12|key)$|(^|/)(auth|mcp-auth|secrets?)\.json$",
+    re.I,
+)
 WRITE_ACTIONS = {"edit", "write", "patch", "apply_patch", "multiedit"}
 
 log = logging.getLogger("docket")
@@ -896,9 +902,15 @@ class Docket:
         return "\n".join(f"- {name}" for name in changed[:30]) + ("\n- …" if len(changed) > 30 else "")
 
     def resend_text(self, row: dict, turn, why: str, new_session: bool) -> str:
+        """What the coding agent reads when an instruction goes again: English whatever the person's
+        language (RELEASE_GATE: what a model reads is English; `why` is the person's wording, kept as is
+        only when that is English too)."""
+        en = i18n.Strings("en")
+        why = why if self.locale == "en" else "it did not run to the end"
         if new_session:
-            return self.t("resend_new", session=turn["session"], why=why, files=self.files_left(row, turn), message=turn["message"])
-        return self.t("resend_same", why=why, message=turn["message"])
+            files = self.files_left(row, turn).replace(self.t("no_files"), en("no_files"))
+            return en("resend_new", session=turn["session"], why=why, files=files, message=turn["message"])
+        return en("resend_same", why=why, message=turn["message"])
 
     def unfinished(self, delegation_id: str, turn_id: int, event: str, reply: str | None):
         """A run ended interrupted, killed or failed: not a delivery. A usage limit goes to the
@@ -2649,9 +2661,14 @@ class Docket:
             direction = "shell"
         else:
             return "ask", f"unknown action {action}"
+        if any(CREDENTIALS.search(p.rstrip("*").rstrip("/")) for p in raw) and not any(p.endswith((".example", ".sample", ".template")) for p in raw):
+            return "ask", "credentials"
         # Reading cannot destroy anything, so the path markers in _destructive (/etc/, /usr/) only guard changes.
         if direction != "read" and self._destructive(" ".join(raw)):
             return "ask", "destructive"
+        danger = risk.of(" ; ".join(raw)) if direction == "shell" else None
+        if danger:  # push, publish, deploy, a script from the network, the system: never on the person's behalf
+            return "ask", f"risky ({danger})"
         project = self.project_dir(row)
         if direction == "shell":
             # Paths a command reaches outside the project arrive as their own external_directory request.

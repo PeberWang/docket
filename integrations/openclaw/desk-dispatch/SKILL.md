@@ -16,7 +16,7 @@ cd <project dir> && ~/.openclaw/workspace/skills/desk-dispatch/scripts/desk-disp
   --title "<short task name>" -f <brief file> "<one-line instruction>"
 ```
 
-- `--title` is required. Keep it short and specific: at most 12 Chinese characters or 24 Latin ones, a plain name for the work, no version numbers, paths or tech stack (「健身记录 App」, not 「健身 FitLog v0.1 原生 iPhone 训练应用」). Docket cuts a longer one with an ellipsis on the card.
+- `--title` is required. Keep it short and specific: at most 24 characters (a Chinese, Japanese or Korean character counts as two), a plain name for the work, no version numbers, paths or tech stack ("Workout log app", not "FitLog v0.1 native iOS workout tracking application"). Docket cuts a longer one with an ellipsis on the card.
 - `--engine opencode|claude|codex` picks the agent. Leave it out to use the user's default (OpenCode unless they set another).
 - `--auto` lets OpenCode approve its own permission requests (OpenCode only; Claude Code and Codex use Docket's unattended settings). OpenCode 2.2 and later runs unattended anyway: Docket answers the requests itself, approving what is inside the project and putting writes outside it on a card.
 - `--model <id>` passes a model to the agent.

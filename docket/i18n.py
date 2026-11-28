@@ -134,8 +134,6 @@ TEXT = {
         "orphan_question": "现在按 PM 这条回复执行？",
         "orphan_run": "执行",
         "orphan_skip": "不执行",
-        "resend_same": "（案头：这条指令之前发过，{why}。现在重发一次，请从项目当前的状态接着做。）\n\n{message}",
-        "resend_new": "（案头：这是接着 OpenCode 会话 {session} 的工作，那边{why}，那个会话已经不再接受指令。上一轮留下的文件：\n{files}\n请在这些改动的基础上继续，不要从头重做。）\n\n{message}",
         "no_files": "（没有文件改动）",
         "err_taken_over": "这件交办已被你接管：先交还，或直接在 OpenCode 里说。",
         "err_note_empty": "写一句要转达的话",

@@ -20,6 +20,11 @@ rm -f "$DATA/config.json" "$DATA/daemon.json"
 defaults delete "$LABEL" 2>/dev/null || true
 
 if [ "${1:-}" = "--purge" ]; then
+  # The PM agent's workspace lives in $DATA: the agent goes with it, so OpenClaw keeps no entry for a missing folder.
+  if command -v openclaw >/dev/null && openclaw agents list 2>/dev/null | grep -q "docket-pm"; then
+    openclaw agents delete docket-pm --force >/dev/null 2>&1 && echo "Deleted the OpenClaw agent docket-pm and its PM sessions." \
+      || echo "Could not delete the OpenClaw agent docket-pm; run: openclaw agents delete docket-pm"
+  fi
   rm -rf "$DATA" "$LOGS"
   echo "Removed OpenClaw Docket and its data."
 else
